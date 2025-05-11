@@ -1,6 +1,5 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/salvodif/TomeTrove/main/assets/tometrove_logo_banner.png" width="300" alt="TomeTrove Logo" />
-  <h1>📚 TomeTrove</h1>
   <p><em>A Python TUI application for managing your digital book library, built with Textual.</em></p>
 
   <!-- Badges -->
