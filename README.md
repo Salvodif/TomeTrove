@@ -129,7 +129,7 @@ You can also configure these paths through the **Settings screen (`Ctrl+S`)** wi
 
 The application will start, displaying your book library (empty at first). Use the keybindings below to navigate and manage your books.
 
-![alt text](main/assets/main.png)
+![TomeTrove Main Screen](/assets/main.png) 
 
 ### ➤ Keybindings (Main Screen)
 
