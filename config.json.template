@@ -1,0 +1,9 @@
+{
+  "paths": {
+    "tinydb_file": "library.json",
+    "library_path": "/path/with/yours/pdfs",
+    "upload_dir_path": "/default/path/where/look/for/pdf/to/upload",
+    "exiftool_path": "/exiftool/path/exiftool.exe",
+    "log_dir": "/logs/path" 
+  }
+}

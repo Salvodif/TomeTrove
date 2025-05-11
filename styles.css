@@ -1,0 +1,159 @@
+/* styles.css - Stile Pastello Nord-like */
+Screen {
+    layout: vertical;
+    /* Assicurati che il tema dell'app usi colori base Nord-like */
+    /* Esempio: primary/accent -> blu nord chiaro, secondary -> verde/grigio nord chiaro */
+}
+
+/* --- Stili Comuni per Schermate Form (Add/Edit) --- */
+
+.form-screen-container {
+    padding: 1 2;
+    border: round $primary-lighten-1;
+    background: $surface;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+.title {
+    /* Titolo delle schermate */
+    text-style: bold;
+    width: 100%;
+    text-align: center;
+    margin-bottom: 1;
+    color: $primary;
+}
+
+/* --- Stili per il Contenuto del Form (generato da BookForm) --- */
+
+#form-container {
+    width: 100%;
+    height: 1fr;
+    scrollbar-color: $accent;
+    border: round $primary-lighten-3;
+    margin-bottom: 1;
+    padding: 1;
+}
+
+#form-content {
+    width: 100%;
+}
+
+/* Stili standard per righe Label + Input/Widget nel form */
+.form-row {
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+}
+
+.form-label {
+    width: 25%;
+    max-width: 25%;
+    text-align: right;
+    padding-right: 2;
+    color: $text-muted;
+    /* border: solid red; */
+}
+
+.form-input {
+    width: 73%;
+    background: $panel-lighten-1;
+    border: round $primary-lighten-2;
+}
+
+/* Input/TextArea quando hanno il focus */
+Input:focus, TextArea:focus {
+    border: round $accent; /* Usa il colore accento pastello per il focus */
+}
+
+/* Stile specifico per TextArea dentro una form-row */
+.form-row TextArea.form-input {
+    height: 6;
+    max-height: 10;
+}
+
+/* --- Stili Specifici per Widget --- */
+
+DirectoryTree {
+    width: 80%;
+    height: 15;
+    overflow-x: auto;
+    overflow-y: auto;
+    border: round $secondary-lighten-1;
+    margin-bottom: 1;
+    background: $surface;
+}
+
+TextArea {
+    /* Dagli un'altezza minima/fissa se .form-input non basta */
+    height: 6;
+    max-height: 10;
+}
+
+#selected-file {
+    /* Etichetta per il file selezionato in AddScreen */
+    width: 100%;
+    height: auto;
+    text-style: italic;
+    /* Colore testo muted (grigio pastello) */
+    color: $text-muted;
+    margin-top: 1;
+    padding: 0 1;
+    /* Bordo decorativo molto sottile */
+    border: dashed $primary-lighten-3;
+    background: $surface;
+}
+
+.form-checkbox {
+    width: auto;
+    margin-left: 1;
+    margin-right: 1;
+}
+
+/* Barra dei Pulsanti (comune per Add/Edit) */
+.button-bar {
+    /* height: 3; */
+    height: auto;
+    margin-top: 1;
+    align: center middle; /* Centra i pulsanti */
+    width: 100%;
+}
+
+.button-bar Button {
+    margin: 0 1; /* Spazio tra i pulsanti */
+}
+
+.button-primary {
+    /* Usa il colore primario pastello come sfondo */
+    /* Nota: potresti dover regolare $primary o usare $accent se $primary non è definito o non è il colore desiderato */
+    background: $primary;
+    /* Testo scuro/chiaro per contrasto (adatta $text o usa $background a seconda del colore di background) */
+    color: $text;
+}
+
+.button-primary:hover {
+    background: $primary-darken-1; /* Leggermente più scuro al hover */
+}
+
+/* --- Stili Specifici per Schermate --- */
+
+/* AddScreen (se necessario) */
+#add-container {
+    /* Potrebbe non servire più se .form-screen-container è sufficiente */
+    /* Eventuali override specifici per add */
+}
+
+/* EditScreen */
+/* #edit-container {
+    width: 100%;
+    align: center top;
+} */
+
+#edit-title-label {
+    /* Titolo specifico per EditScreen */
+    /* Eredita da .title ma aggiunge colore e sottolineatura */
+    /* Usa un verde pastello nord per "successo/modifica" */
+    color: $success-lighten-1;
+    text-style: bold underline;
+    margin-bottom: 1;
+}
