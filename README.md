@@ -108,7 +108,7 @@ Here's an example structure (adjust paths for your system):
     "log_dir": "/logs/path" 
   }
 }
-
+```
 *   `tinydb_file`: Name of the TinyDB database file (e.g., `library.json`). It will be created inside your `library_path`.
 *   `library_path`: The root directory where your book files will be organized (by author) and stored. **This is a critical path.**
 *   `upload_dir_path`: Default directory the file browser will open to when adding new books.
