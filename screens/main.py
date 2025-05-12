@@ -168,8 +168,6 @@ class MainScreen(Screen):
                             None
                         )
                         if tag_info:
-                            formatted.append(f"{tag_info['icon']} {tag_name}")
-                        else:
                             formatted.append(tag_name)
                     formatted_tags.append(", ".join(formatted))
 
