@@ -1,4 +1,3 @@
-from pathlib import Path
 from textual.app import App
 from textual.message import Message
 
@@ -8,7 +7,7 @@ from models import LibraryManager
 from screens.main import MainScreen
 from tools.logger import AppLogger
 
-class BookManagerApp(App):
+class TomeTrove(App):
     CSS_PATH = "styles.css"
     
     def __init__(self, config_manager: ConfigManager, library_manager: LibraryManager):
@@ -39,7 +38,7 @@ def run_app():
         config_manager.paths['library_path'],
         config_manager.paths['tinydb_file']
     )
-    app = BookManagerApp(config_manager, library_manager)
+    app = TomeTrove(config_manager, library_manager)
     app.run()
 
 if __name__ == "__main__":

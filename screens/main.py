@@ -10,7 +10,6 @@ from configmanager import ConfigManager
 from formvalidators import FormValidators
 from filesystem import FileSystemHandler
 from messages import BookAdded
-from tag_formatter import TagFormatter
 from widgets.datatablebook import DataTableBook
 from models import LibraryManager
 from screens.add import AddScreen
