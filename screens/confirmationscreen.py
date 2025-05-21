@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Button, Static
-from textual.containers import Vertical, HorizontalLayout
+from textual.containers import Vertical, Horizontal # MODIFICATO QUI
 from typing import Optional
 
 class ConfirmationScreen(Screen[bool]):
@@ -57,7 +57,7 @@ class ConfirmationScreen(Screen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm_dialog"):
             yield Static(self._prompt, id="confirm_prompt")
-            with HorizontalLayout(id="confirm_buttons"):
+            with Horizontal(id="confirm_buttons"): # MODIFICATO QUI
                 yield Button(self._confirm_label, variant="primary", id="confirm_action")
                 yield Button(self._cancel_label, variant="error", id="cancel_action")
 
