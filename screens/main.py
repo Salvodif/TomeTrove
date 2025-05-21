@@ -36,10 +36,6 @@ class MainScreen(Screen):
         self.main_upload_dir = config_manager.paths["upload_dir_path"]
         self.logger = AppLogger.get_logger()
 
-        # Inizializza il formattatore di tag
-        # tags_data = library_manager.tags.get_all_tags()
-        # self.tag_formatter = TagFormatter(tags_data)
-
         self.sort_reverse = False
         self.sort_field = "added"
         self.theme = "nord"
