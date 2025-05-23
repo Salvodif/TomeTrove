@@ -23,12 +23,13 @@ from screens.confirmationscreen import ConfirmationScreen
 
 
 class MainScreen(Screen):
+    """Main application screen for displaying and managing books."""
     BINDINGS = [
         ("ctrl+f", "search_book", "Search"),
         ("f5", "reset_search", "Reset Search"),
         ("e", "edit_book", "Edit"),
         ("ctrl+a", "add_book", "Add"),
-        ("ctrl+r", "reverse_sort", "Sort Order"),
+        ("ctrl+r", "reverse_sort", "Sort Order"), # Toggle sort order for the current field
         ("ctrl+o", "open_book", "Open"),
         ("ctrl+s", "settings", "Settings"),
         ("ctrl+e", "delete_book_action", "Delete Book")
@@ -41,7 +42,8 @@ class MainScreen(Screen):
         self.main_upload_dir = config_manager.paths["upload_dir_path"]
         self.logger = AppLogger.get_logger()
 
-        self.sort_reverse = True
+        # Default sort order: newest first
+        self.sort_reverse = True 
         self.sort_field = "added"
 
     def compose(self) -> ComposeResult:
@@ -52,27 +54,21 @@ class MainScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        """Called when the screen is mounted. Loads initial table data."""
         self.reload_table_data()
 
-    def _format_tags_for_books(self, books: list[Book]) -> list[str]:
-        formatted_tags_list = []
-        for book in books:
-            if book.tags and isinstance(book.tags, list):
-                formatted_tags_list.append(", ".join(str(tag) for tag in book.tags if tag))
-            else:
-                formatted_tags_list.append("")
-        return formatted_tags_list
-
     def _display_books_in_table(self, books: list[Book]) -> None:
+        """Updates the DataTable with the provided list of books."""
         table = self.query_one("#books-table", DataTableBook)
-        formatted_tags = self._format_tags_for_books(books)
-        table.update_table(books, formatted_tags)
+        table.update_table(books)
 
     def reload_table_data(self) -> None:
+        """Reloads and sorts books, then updates the table display."""
         books = self.library_manager.books.sort_books(self.sort_field, reverse=self.sort_reverse)
         self._display_books_in_table(books)
 
     def action_edit_book(self) -> None:
+        """Handles the 'edit_book' action: opens the EditScreen for the selected book."""
         table = self.query_one("#books-table", DataTableBook)
         book_uuid = table.current_uuid
         if book_uuid:
@@ -85,12 +81,15 @@ class MainScreen(Screen):
             self.notify("No book selected to edit.", severity="warning", title="Selection Missing")
 
     def action_add_book(self) -> None:
+        """Handles the 'add_book' action: opens the AddScreen."""
         self.app.push_screen(AddScreen(self.library_manager.books, self.main_upload_dir))
 
     def action_settings(self) -> None:
+        """Handles the 'settings' action: opens the SettingsScreen."""
         self.app.push_screen(SettingsScreen(self.config_manager))
 
     def action_open_book(self) -> None:
+        """Handles the 'open_book' action: opens the selected book file with the default application."""
         try:
             table = self.query_one("#books-table", DataTableBook)
             book_uuid = table.current_uuid
@@ -126,7 +125,100 @@ class MainScreen(Screen):
             self.logger.error("Unexpected error during open book action.", exc_info=e)
             self.notify(f"An unexpected error occurred: {str(e)}", severity="error", title="Error")
 
+    def _delete_book_from_database(self, book_to_delete: Book) -> bool:
+        """Removes the book from the TinyDB database."""
+        try:
+            self.library_manager.books.remove_book(book_to_delete.uuid)
+            self.logger.info(
+                f"Book removed from DB: '{book_to_delete.title}' "
+                f"(Author: {book_to_delete.author}, UUID: {book_to_delete.uuid})"
+            )
+            return True
+            except Exception as e: # More general catch for potential DB issues
+            self.logger.error(
+                f"Error removing book '{book_to_delete.title}' (UUID: {book_to_delete.uuid}) from DB: {e}",
+                exc_info=True
+            )
+            return False
+
+    def _delete_book_file(self, book_to_delete: Book) -> tuple[bool, str]:
+        """Deletes the book's physical file."""
+        file_deleted = False
+        message_part = ""
+
+        if book_to_delete.filename:
+            book_path_str = ""
+            try:
+                book_path_str = self.library_manager.books.get_book_path(book_to_delete)
+            except ValueError as e:
+                self.logger.warning(
+                    f"Could not determine path for book '{book_to_delete.title}' "
+                    f"(filename: {book_to_delete.filename}): {e}. File may not be deleted."
+                )
+                message_part = " (file path not resolved)"
+
+            if book_path_str:
+                book_file = Path(book_path_str)
+                if book_file.exists():
+                    try:
+                        book_file.unlink()
+                        file_deleted = True
+                        self.logger.info(f"Book file deleted from filesystem: {book_path_str}")
+                        message_part = " and its file"
+                    except OSError as e:
+                        self.logger.error(f"Error deleting file {book_path_str}: {e}")
+                        message_part = " (file deletion failed)"
+                else:
+                    self.logger.warning(f"Book file not found for deletion: {book_path_str}")
+                    message_part = " (file not found)"
+            elif not message_part: # Filename exists, but path wasn't obtained and no specific error already set.
+                self.logger.warning(
+                    f"File '{book_to_delete.filename}' for book '{book_to_delete.title}' "
+                    f"was not processed (e.g., path resolution issue)."
+                )
+                message_part = " (file not processed)"
+        else:
+            # No filename associated with the book, so no file to delete.
+            # This is a normal case, not an error.
+            message_part = "" # Or " (no file associated)" if explicit mention is desired
+            
+        return file_deleted, message_part
+
+    def _delete_author_directory_if_empty(self, book_to_delete: Book) -> tuple[bool, str]:
+        """Deletes the author's directory if it's empty."""
+        dir_deleted = False
+        message_part = ""
+        
+        book_author_fs_name = FormValidators.author_to_fsname(book_to_delete.author)
+        if book_author_fs_name:
+            author_dir_path = Path(self.library_manager.books.library_root) / book_author_fs_name
+            
+            if author_dir_path.exists() and author_dir_path.is_dir():
+                library_root_path = Path(self.library_manager.books.library_root)
+                # Safety check: ensure it's a subdirectory of the library root and not the root itself
+                if author_dir_path != library_root_path and library_root_path in author_dir_path.parents:
+                    try:
+                        if not os.listdir(str(author_dir_path)): # Check if empty
+                            author_dir_path.rmdir() # Delete empty directory
+                            dir_deleted = True
+                            self.logger.info(f"Empty author directory deleted: {author_dir_path}")
+                            message_part = " and empty author directory"
+                        else:
+                            self.logger.info(f"Author directory {author_dir_path} is not empty, not deleted.")
+                    except OSError as e:
+                        self.logger.error(f"Could not delete empty author directory {author_dir_path}: {e}")
+                        message_part = " (author dir not deleted due to error)"
+                else:
+                    self.logger.warning(f"Skipping author directory deletion for an invalid or root path: {author_dir_path}")
+            else:
+                self.logger.info(f"Author directory for '{book_author_fs_name}' not found or not a directory, not attempting deletion.")
+        else:
+            self.logger.warning(f"Could not determine valid filesystem name for author '{book_to_delete.author}', skipping directory deletion check.")
+
+        return dir_deleted, message_part
+
     def _handle_delete_confirmation(self, confirmed: bool, book_uuid: str) -> None:
+        """Callback for the delete confirmation dialog."""
         if not confirmed:
             self.notify("Book deletion cancelled.", title="Cancelled")
             return
@@ -136,89 +228,34 @@ class MainScreen(Screen):
             self.notify(f"Book with UUID {book_uuid} not found for deletion.", severity="error", title="Error")
             return
 
-        book_title_for_msg = book_to_delete.title # Store for notification
+        book_title_for_msg = book_to_delete.title 
 
         try:
-            # 1. Remove the book from the TinyDB database
-            self.library_manager.books.remove_book(book_to_delete.uuid)
-            self.logger.info(
-                f"Book removed from DB: '{book_title_for_msg}' "
-                f"(Author: {book_to_delete.author}, UUID: {book_to_delete.uuid})"
-            )
+            db_deleted = self._delete_book_from_database(book_to_delete)
 
-            # 2. Attempt to delete the book file from the filesystem
-            file_operation_message_part = ""
-            book_path_str = ""
-            if book_to_delete.filename:
-                try:
-                    book_path_str = self.library_manager.books.get_book_path(book_to_delete)
-                except ValueError as e:
-                    self.logger.warning(
-                        f"Could not determine path for book '{book_title_for_msg}' "
-                        f"(filename: {book_to_delete.filename}): {e}. File may not be deleted."
-                    )
-                    file_operation_message_part = " (file path not resolved)"
-
-            if book_path_str:  # A path was determined
-                book_file = Path(book_path_str)
-                if book_file.exists():
-                    try:
-                        book_file.unlink()
-                        self.logger.info(f"Book file deleted from filesystem: {book_path_str}")
-                        file_operation_message_part = " and its file"
-                    except OSError as e:
-                        self.logger.error(f"Error deleting file {book_path_str}: {e}")
-                        file_operation_message_part = " (file deletion failed)"
-                else:
-                    self.logger.warning(f"Book file not found in filesystem for deletion: {book_path_str}")
-                    file_operation_message_part = " (file not found)"
-            elif book_to_delete.filename and not file_operation_message_part:
-                 # This case is if filename exists but get_book_path failed earlier and set file_operation_message_part
-                 # If file_operation_message_part is still empty, it means get_book_path didn't even run (e.g. invalid author early)
-                 # However, the current logic determines book_path_str first, so this specific branch might be redundant
-                 # if the `except ValueError` for `get_book_path` already sets `file_operation_message_part`.
-                 # For safety, we can log if filename exists but no specific file message part was set.
-                 self.logger.warning(
-                    f"File '{book_to_delete.filename}' associated with book '{book_title_for_msg}' "
-                    f"was not actioned (path resolution issue or other pre-check)."
-                )
-                 if not file_operation_message_part : file_operation_message_part = " (file not actioned)"
-
-
-            # 3. Check and delete author's directory if empty
-            dir_deleted_message_part = ""
-            # Sanitize author name for filesystem and construct potential directory path
-            book_author_fs_name = FormValidators.author_to_fsname(book_to_delete.author)
-            if book_author_fs_name: # Only proceed if author name is valid for a directory
-                author_dir_path = Path(self.library_manager.books.library_root) / book_author_fs_name
+            if db_deleted:
+                _file_deleted, file_message_part = self._delete_book_file(book_to_delete)
+                _dir_deleted, dir_message_part = self._delete_author_directory_if_empty(book_to_delete)
                 
-                if author_dir_path.exists() and author_dir_path.is_dir():
-                    library_root_path = Path(self.library_manager.books.library_root)
-                    # Safety check: ensure it's a subdirectory of the library root and not the root itself
-                    if author_dir_path != library_root_path and library_root_path in author_dir_path.parents:
-                        if not os.listdir(str(author_dir_path)): # Check if empty
-                            try:
-                                author_dir_path.rmdir() # Delete empty directory
-                                self.logger.info(f"Empty author directory deleted: {author_dir_path}")
-                                dir_deleted_message_part = " and empty author directory"
-                            except OSError as e:
-                                self.logger.error(f"Could not delete empty author directory {author_dir_path}: {e}")
-                                dir_deleted_message_part = " (author dir not deleted due to error)"
-                        else:
-                            self.logger.info(f"Author directory {author_dir_path} is not empty, not deleted.")
-                    else:
-                        self.logger.warning(f"Skipping author directory deletion for an invalid or root path: {author_dir_path}")
-                else:
-                    self.logger.info(f"Author directory for '{book_author_fs_name}' not found or not a directory, not attempting deletion.")
-            
-            self.reload_table_data()
-            self.notify(f"Book '{book_title_for_msg}' deleted from DB{file_operation_message_part}{dir_deleted_message_part}.", title="Deleted")
+                self.reload_table_data()
+                self.notify(
+                    f"Book '{book_title_for_msg}' deleted from DB{file_message_part}{dir_message_part}.",
+                    title="Deleted"
+                )
+            else:
+                # If DB deletion failed, notify and potentially skip file/dir operations
+                self.notify(
+                    f"Failed to delete book '{book_title_for_msg}' from the database.",
+                    severity="error",
+                    title="Deletion Error"
+                )
 
         except Exception as e:
             self.logger.error(f"Unexpected error during book deletion '{book_title_for_msg}': {e}", exc_info=True)
             self.notify(f"Error during deletion: {str(e)}", severity="error", title="Deletion Error")
 
     def action_delete_book_action(self) -> None:
+        """Handles the 'delete_book_action': prompts for confirmation then deletes the selected book."""
         table = self.query_one("#books-table", DataTableBook)
         book_uuid = table.current_uuid
         if not book_uuid:
@@ -244,6 +281,7 @@ class MainScreen(Screen):
         )
 
     def action_reverse_sort(self) -> None:
+        """Handles the 'reverse_sort' action: changes sort field or reverses current sort order."""
         table = self.query_one("#books-table", DataTableBook)
         column_mapping = { 0: "added", 1: "author", 2: "title", 3: "read", 4: "tags" }
         current_cursor_column = table.cursor_column
@@ -259,11 +297,14 @@ class MainScreen(Screen):
         self.reload_table_data()
 
     def on_book_added(self, event: BookAdded) -> None:
+        """Event handler for when a new book is added."""
         self.reload_table_data()
         self.notify("Book added successfully!", title="Success")
 
     def action_search_book(self) -> None:
+        """Handles the 'search_book' action: opens an input dialog for search query."""
         def handle_search_query(query: str) -> None:
+            """Callback for the search input dialog."""
             if query:
                 books = self.library_manager.books.search_books_by_text(query)
                 if books:
@@ -279,5 +320,6 @@ class MainScreen(Screen):
         )
 
     def action_reset_search(self) -> None:
+        """Handles the 'reset_search' action: clears search and reloads all books."""
         self.reload_table_data()
         self.notify("Search reset. Displaying all books.", title="Search Reset")
