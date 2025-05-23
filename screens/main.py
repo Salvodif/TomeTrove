@@ -1,4 +1,4 @@
---- START OF FILE screens/main.py ---
+
 import os # Added for os.listdir
 from pathlib import Path
 from functools import partial # For passing arguments to callbacks
@@ -17,7 +17,7 @@ from widgets.datatablebook import DataTableBook
 from models import LibraryManager, Book
 from screens.add import AddScreen
 from screens.edit import EditScreen
-from screens.settings import Settings # Corrected from SettingsScreen based on previous error
+from screens.settings import SettingsScreen
 from screens.inputscreen import InputScreen
 from screens.confirmationscreen import ConfirmationScreen
 
@@ -88,7 +88,7 @@ class MainScreen(Screen):
         self.app.push_screen(AddScreen(self.library_manager.books, self.main_upload_dir))
 
     def action_settings(self) -> None:
-        self.app.push_screen(Settings(self.config_manager))
+        self.app.push_screen(SettingsScreen(self.config_manager))
 
     def action_open_book(self) -> None:
         try:
