@@ -385,4 +385,5 @@ class MainScreen(Screen):
 
     def action_show_series_list(self) -> None:
         """Handles the 'show_series_list' action: opens the SeriesListScreen."""
+        self.logger.debug("MainScreen: action_show_series_list triggered.")
         self.app.push_screen(SeriesListScreen(self.library_manager))

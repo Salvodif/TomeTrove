@@ -30,6 +30,7 @@ class SeriesListScreen(Screen):
 
     def on_mount(self) -> None:
         """Called when the screen is mounted. Fetches and displays series names."""
+        self.logger.debug("SeriesListScreen: on_mount called.")
         try:
             self.series_names = self.library_manager.books.get_all_series_names()
             table = self.query_one("#series-list-table", DataTable)
