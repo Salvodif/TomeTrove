@@ -120,16 +120,19 @@ class TagAutoComplete(AutoComplete):
 
 
         with self.prevent(Input.Changed): # Prevent feedback loop from Input.Changed event.
+            self.target.value = final_reconstructed_text
             target_input_widget.value = final_reconstructed_text
+
             # Calculate new cursor position: after the inserted tag + ", " (or just after the text if no tags yet).
             if final_reconstructed_text: # If text exists (meaning a completion happened and we added ", ")
                 new_cursor_pos = len(final_reconstructed_text)
             else: # Should not happen if a completion was applied, but as a fallback
                 new_cursor_pos = len(value)
 
+            self.target.cursor_position = new_cursor_pos
             target_input_widget.cursor_position = new_cursor_pos
         
-        # self.post_completion() # Default behavior hides the dropdown, which is usually fine.
+        self.post_completion() # Default behavior hides the dropdown, which is usually fine.
 
 
 class BookForm:
