@@ -36,8 +36,7 @@ class MainScreen(Screen):
         ("ctrl+s", "settings", "Settings"),
         ("ctrl+e", "delete_book_action", "Delete Book"),
         ("ctrl+p", "filter_by_series", "Filter Series"),
-        ("alt+s", "show_series_list", "Series List")
-    ]
+        ("f6", "show_series_list", "Series List (F6)")
 
     def __init__(self, config_manager: ConfigManager, library_manager: LibraryManager):
         super().__init__()
@@ -191,7 +190,7 @@ class MainScreen(Screen):
                 f"(Author: {book_to_delete.author}, UUID: {book_to_delete.uuid})"
             )
             return True
-            except Exception as e: # More general catch for potential DB issues
+        except Exception as e: # More general catch for potential DB issues
             self.logger.error(
                 f"Error removing book '{book_to_delete.title}' (UUID: {book_to_delete.uuid}) from DB: {e}",
                 exc_info=True
@@ -385,4 +384,5 @@ class MainScreen(Screen):
 
     def action_show_series_list(self) -> None:
         """Handles the 'show_series_list' action: opens the SeriesListScreen."""
+        self.logger.debug("MainScreen: action_show_series_list triggered.")
         self.app.push_screen(SeriesListScreen(self.library_manager))
