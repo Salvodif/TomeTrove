@@ -340,6 +340,26 @@ class BookManager:
             return []
         return sorted(list(set(book.author for book in self._cache.values() if book.author)))
 
+    def get_all_series_names(self) -> List[str]:
+        """Gets a list of unique and sorted series names."""
+        self._ensure_cache()
+        if not self._cache:
+            return []
+        
+        series_names = set()
+        for book in self._cache.values():
+            if book.series and book.series.strip():
+                series_names.add(book.series)
+        return sorted(list(series_names))
+
+    def get_books_by_series(self, series_name: str) -> List[Book]:
+        """Gets a list of books belonging to a specific series."""
+        self._ensure_cache()
+        if not self._cache:
+            return []
+        
+        return [book for book in self._cache.values() if book.series == series_name]
+
     def search_books_by_text(self, text: str) -> List[Book]:
         """Searches books by text in title or author."""
         if not text:
