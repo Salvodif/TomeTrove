@@ -9,6 +9,7 @@ class DataTableBook(DataTable):
         self.add_column("Added", width=10)      # Column for "Aggiunto"
         self.add_column("Author", width=25)     # Column for "Autore"
         self.add_column("Title", width=90)      # Column for "Titolo"
+        self.add_column("Series", width=30)     # Column for "Series"
         self.add_column("Read", width=5)        # Column for "Letto"
         self.add_column("Tags", width=30)
         self.cursor_type = "row"
@@ -29,10 +30,21 @@ class DataTableBook(DataTable):
             added_date = b.added.strftime("%Y-%m-%d") # Format added date
             tags_display = ", ".join(b.tags) # Join tags into a comma-separated string
 
+            series_display = "—"
+            if b.series:
+                if b.num_series is not None:
+                    if isinstance(b.num_series, float) and b.num_series.is_integer():
+                        series_display = f"{b.series} [{int(b.num_series)}]"
+                    else:
+                        series_display = f"{b.series} [{b.num_series}]"
+                else:
+                    series_display = b.series
+            
             self.add_row(
                 added_date,
                 b.author,
                 b.title,
+                series_display,
                 read_date,
                 tags_display,
                 key=b.uuid # Use book's UUID as the row key
