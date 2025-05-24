@@ -36,7 +36,7 @@ class MainScreen(Screen):
         ("ctrl+s", "settings", "Settings"),
         ("ctrl+e", "delete_book_action", "Delete Book"),
         ("ctrl+p", "filter_by_series", "Filter Series"),
-        ("alt+s", "show_series_list", "Series List")
+        ("f6", "show_series_list", "Series List (F6)")
     ]
 
     def __init__(self, config_manager: ConfigManager, library_manager: LibraryManager):
