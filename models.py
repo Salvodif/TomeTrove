@@ -314,9 +314,17 @@ class BookManager:
                 logger.warning(f"Unexpected type for 'read' in update_book: {type(new_data['read'])}. Setting to None.")
                 new_data['read'] = None
 
-        # Ensure filename, if present and a Path object, is converted to string for TinyDB compatibility
-        if 'filename' in new_data and isinstance(new_data['filename'], Path):
-            new_data['filename'] = str(new_data['filename'])
+        # Granular logging for 'filename' field processing
+        if 'filename' in new_data:
+            logger.debug(f"BookManager.update_book - Filename field present. Type before conversion check: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+            if isinstance(new_data['filename'], Path):
+                logger.debug(f"BookManager.update_book - Attempting to convert filename from Path object.")
+                new_data['filename'] = str(new_data['filename'])
+                logger.debug(f"BookManager.update_book - Filename field converted. Type after conversion: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+            else:
+                logger.debug(f"BookManager.update_book - Filename field is present but not a Path object. Type: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+        else:
+            logger.debug("BookManager.update_book - Filename field not in new_data.")
 
         logger.debug(f"BookManager.update_book - Data before TinyDB update operation: {new_data}")
         self.books_table.update(new_data, q.uuid == uuid)
