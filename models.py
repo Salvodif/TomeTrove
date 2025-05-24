@@ -262,6 +262,8 @@ class BookManager:
 ################### UPDATE BOOK ###########################
     def update_book(self, uuid: str, new_data: Dict):
         """Updates an existing book and invalidates the cache."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"BookManager.update_book - Attempting to update book with UUID: {uuid}. Incoming data: {new_data}")
         q = tinydb.Query()
         
         # Process 'added' field
@@ -316,6 +318,7 @@ class BookManager:
         if 'filename' in new_data and isinstance(new_data['filename'], Path):
             new_data['filename'] = str(new_data['filename'])
 
+        logger.debug(f"BookManager.update_book - Data before TinyDB update operation: {new_data}")
         self.books_table.update(new_data, q.uuid == uuid)
         self._dirty = True
 #################################################################
