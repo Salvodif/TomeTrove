@@ -191,7 +191,7 @@ class MainScreen(Screen):
                 f"(Author: {book_to_delete.author}, UUID: {book_to_delete.uuid})"
             )
             return True
-            except Exception as e: # More general catch for potential DB issues
+        except Exception as e: # More general catch for potential DB issues
             self.logger.error(
                 f"Error removing book '{book_to_delete.title}' (UUID: {book_to_delete.uuid}) from DB: {e}",
                 exc_info=True
