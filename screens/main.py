@@ -3,7 +3,6 @@ import os # Added for os.listdir
 from pathlib import Path
 from functools import partial # For passing arguments to callbacks
 
-from typing import Optional, List # Added Optional, List
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.containers import Container # Removed Horizontal, Vertical as they are not directly used here
@@ -21,7 +20,6 @@ from screens.edit import EditScreen
 from screens.settings import SettingsScreen
 from screens.inputscreen import InputScreen
 from screens.confirmationscreen import ConfirmationScreen
-from screens.serieslist import SeriesListScreen # Import SeriesListScreen
 
 
 class MainScreen(Screen):
@@ -34,16 +32,13 @@ class MainScreen(Screen):
         ("ctrl+r", "reverse_sort", "Sort Order"), # Toggle sort order for the current field
         ("ctrl+o", "open_book", "Open"),
         ("ctrl+s", "settings", "Settings"),
-        ("ctrl+e", "delete_book_action", "Delete Book"),
-        ("ctrl+p", "filter_by_series", "Filter Series"),
-        ("f6", "show_series_list", "Series List (F6)")
+        ("ctrl+e", "delete_book_action", "Delete Book")
     ]
 
     def __init__(self, config_manager: ConfigManager, library_manager: LibraryManager):
         super().__init__()
         self.config_manager = config_manager
         self.library_manager = library_manager
-        self.current_series_filter: Optional[str] = None
         self.main_upload_dir = config_manager.paths["upload_dir_path"]
         self.logger = AppLogger.get_logger()
 
@@ -69,60 +64,8 @@ class MainScreen(Screen):
 
     def reload_table_data(self) -> None:
         """Reloads and sorts books, then updates the table display."""
-        books: List[Book] 
-        if self.current_series_filter:
-            books = self.library_manager.books.get_books_by_series(self.current_series_filter)
-            # Sort the filtered books
-            if books: # Ensure books list is not empty before trying to access books[0] or sorting
-                # Determine sort key
-                if self.sort_field == 'tags':
-                    sort_key = lambda b: (", ".join(b.tags) if b.tags else "").lower()
-                elif hasattr(books[0], self.sort_field):
-                    sort_key = lambda b: (val.lower() if isinstance(val := getattr(b, self.sort_field), str) 
-                                          else val if val is not None else "")
-                else: # Fallback if sort_field is somehow invalid for the book object
-                    sort_key = lambda b: ""
-                
-                books.sort(key=sort_key, reverse=self.sort_reverse)
-        else:
-            books = self.library_manager.books.sort_books(self.sort_field, reverse=self.sort_reverse)
+        books = self.library_manager.books.sort_books(self.sort_field, reverse=self.sort_reverse)
         self._display_books_in_table(books)
-
-    def action_filter_by_series(self) -> None:
-        """Handles the 'filter_by_series' action: opens an input dialog for series name."""
-        series_names = self.library_manager.books.get_all_series_names()
-        if not series_names:
-            self.notify("No series available to filter by.", title="Filter Series")
-            return
-
-        def handle_series_input(series_name_input: str) -> None:
-            """Callback for the series input dialog."""
-            series_name = series_name_input.strip()
-            if not series_name:
-                self.current_series_filter = None
-                self.reload_table_data()
-                self.notify("Series filter cleared. Displaying all books.", title="Filter Cleared")
-                return
-
-            if series_name not in series_names:
-                self.notify(f"Series '{series_name}' not found. Displaying all books.", title="Filter Series", severity="warning")
-                self.current_series_filter = None
-                self.reload_table_data()
-                return
-            
-            self.current_series_filter = series_name
-            self.reload_table_data()
-            self.notify(f"Showing books in series: '{series_name}'. Press F5 or Ctrl+P (empty) to reset.", title="Filter Active")
-
-        self.notify(f"Available series: {', '.join(series_names)}", title="Available Series", timeout=8)
-        self.app.push_screen(
-            InputScreen(
-                title="Filter by Series",
-                placeholder="Enter series name (or empty to clear)",
-                prompt="Type series name to filter. F5 also clears.",
-                callback=handle_series_input
-            )
-        )
 
     def action_edit_book(self) -> None:
         """Handles the 'edit_book' action: opens the EditScreen for the selected book."""
@@ -191,7 +134,7 @@ class MainScreen(Screen):
                 f"(Author: {book_to_delete.author}, UUID: {book_to_delete.uuid})"
             )
             return True
-        except Exception as e: # More general catch for potential DB issues
+            except Exception as e: # More general catch for potential DB issues
             self.logger.error(
                 f"Error removing book '{book_to_delete.title}' (UUID: {book_to_delete.uuid}) from DB: {e}",
                 exc_info=True
@@ -340,8 +283,7 @@ class MainScreen(Screen):
     def action_reverse_sort(self) -> None:
         """Handles the 'reverse_sort' action: changes sort field or reverses current sort order."""
         table = self.query_one("#books-table", DataTableBook)
-        # Updated column mapping for the new "Series" column
-        column_mapping = { 0: "added", 1: "author", 2: "title", 3: "series", 4: "read", 5: "tags" }
+        column_mapping = { 0: "added", 1: "author", 2: "title", 3: "read", 4: "tags" }
         current_cursor_column = table.cursor_column
         new_sort_field = self.sort_field
         if current_cursor_column is not None and current_cursor_column in column_mapping:
@@ -379,11 +321,5 @@ class MainScreen(Screen):
 
     def action_reset_search(self) -> None:
         """Handles the 'reset_search' action: clears search and reloads all books."""
-        self.current_series_filter = None
         self.reload_table_data()
-        self.notify("All filters reset. Displaying all books.", title="Filters Reset")
-
-    def action_show_series_list(self) -> None:
-        """Handles the 'show_series_list' action: opens the SeriesListScreen."""
-        self.logger.debug("MainScreen: action_show_series_list triggered.")
-        self.app.push_screen(SeriesListScreen(self.library_manager))
+        self.notify("Search reset. Displaying all books.", title="Search Reset")

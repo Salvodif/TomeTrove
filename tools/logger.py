@@ -35,7 +35,7 @@ class AppLogger:
             '%(asctime)s - %(levelname)s - %(message)s'
         ))
         
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
         

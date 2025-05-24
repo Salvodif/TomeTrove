@@ -49,18 +49,24 @@ class TagAutoComplete(AutoComplete):
         Gets candidate tags based on the currently typed part of a tag
         in a comma-separated list.
         """
-        prefix = self.get_search_string(target_state)
+        prefix = self.get_search_string(target_state) 
 
-        current_tag_prefix = prefix
-        if ',' in prefix:
-            parts = prefix.split(',')
-            current_tag_prefix = parts[-1].lstrip() # Consider only the part after the last comma.
+        current_tag_prefix = "" # Default to empty
+        
+        last_comma_index = prefix.rfind(',')
 
+        if last_comma_index != -1:
+            # Text after the last comma
+            current_tag_prefix = prefix[last_comma_index + 1:].lstrip()
+        else:
+            # No comma found, so the whole prefix is the current tag
+            current_tag_prefix = prefix.lstrip() # Strip leading spaces if it's the only tag
+        
         if not current_tag_prefix:
             return []
 
         matches: list[DropdownItem] = []
-        for tag_name in self.all_tags:
+        for tag_name in self.all_tags: # self.all_tags comes from the constructor
             if tag_name.lower().startswith(current_tag_prefix.lower()):
                 matches.append(DropdownItem(main=tag_name))
         return matches
@@ -121,8 +127,6 @@ class TagAutoComplete(AutoComplete):
 
         with self.prevent(Input.Changed): # Prevent feedback loop from Input.Changed event.
             self.target.value = final_reconstructed_text
-            target_input_widget.value = final_reconstructed_text
-
             # Calculate new cursor position: after the inserted tag + ", " (or just after the text if no tags yet).
             if final_reconstructed_text: # If text exists (meaning a completion happened and we added ", ")
                 new_cursor_pos = len(final_reconstructed_text)
@@ -130,7 +134,6 @@ class TagAutoComplete(AutoComplete):
                 new_cursor_pos = len(value)
 
             self.target.cursor_position = new_cursor_pos
-            target_input_widget.cursor_position = new_cursor_pos
         
         self.post_completion() # Default behavior hides the dropdown, which is usually fine.
 
