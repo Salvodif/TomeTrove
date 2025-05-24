@@ -262,6 +262,8 @@ class BookManager:
 ################### UPDATE BOOK ###########################
     def update_book(self, uuid: str, new_data: Dict):
         """Updates an existing book and invalidates the cache."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"BookManager.update_book - Attempting to update book with UUID: {uuid}. Incoming data: {new_data}")
         q = tinydb.Query()
         
         # Process 'added' field
@@ -312,6 +314,19 @@ class BookManager:
                 logger.warning(f"Unexpected type for 'read' in update_book: {type(new_data['read'])}. Setting to None.")
                 new_data['read'] = None
 
+        # Granular logging for 'filename' field processing
+        if 'filename' in new_data:
+            logger.debug(f"BookManager.update_book - Filename field present. Type before conversion check: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+            if isinstance(new_data['filename'], Path):
+                logger.debug(f"BookManager.update_book - Attempting to convert filename from Path object.")
+                new_data['filename'] = str(new_data['filename'])
+                logger.debug(f"BookManager.update_book - Filename field converted. Type after conversion: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+            else:
+                logger.debug(f"BookManager.update_book - Filename field is present but not a Path object. Type: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+        else:
+            logger.debug("BookManager.update_book - Filename field not in new_data.")
+
+        logger.debug(f"BookManager.update_book - Data before TinyDB update operation: {new_data}")
         self.books_table.update(new_data, q.uuid == uuid)
         self._dirty = True
 #################################################################
@@ -339,6 +354,26 @@ class BookManager:
         if not self._cache:
             return []
         return sorted(list(set(book.author for book in self._cache.values() if book.author)))
+
+    def get_all_series_names(self) -> List[str]:
+        """Gets a list of unique and sorted series names."""
+        self._ensure_cache()
+        if not self._cache:
+            return []
+        
+        series_names = set()
+        for book in self._cache.values():
+            if book.series and book.series.strip():
+                series_names.add(book.series)
+        return sorted(list(series_names))
+
+    def get_books_by_series(self, series_name: str) -> List[Book]:
+        """Gets a list of books belonging to a specific series."""
+        self._ensure_cache()
+        if not self._cache:
+            return []
+        
+        return [book for book in self._cache.values() if book.series == series_name]
 
     def search_books_by_text(self, text: str) -> List[Book]:
         """Searches books by text in title or author."""
