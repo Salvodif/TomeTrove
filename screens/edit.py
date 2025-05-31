@@ -60,6 +60,7 @@ class EditScreen(Screen):
                 self.notify(escape(error), severity="error", timeout=5)
             else:
                 values = self.form.get_values()
+                self.logger.debug(f"EditScreen save_changes - Values from form: {values}")
                 self.logger.info(f"Modifica libro: {self.book.uuid} con valori: {values}")
                 self.bookmanager.update_book(self.book.uuid, values)
                 self.notify("Libro aggiornato con successo!", severity="information") # Using information as severity

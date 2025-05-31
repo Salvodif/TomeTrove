@@ -1,8 +1,9 @@
 from pathlib import Path
 import tinydb
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
+import logging
 
 from formvalidators import FormValidators
 from filesystem import FileSystemHandler
@@ -19,42 +20,56 @@ class Book:
     series: Optional[str] = None
     num_series: Optional[float] = None
     description: Optional[str] = None
-    read: Optional[str] = None
+    read: Optional[datetime] = None
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'Book':
-        # Parsing del campo 'added'
+        logger = logging.getLogger(__name__)
         added_str = data['added']
+        added = None
         try:
-            if '+' in added_str or added_str.endswith('Z'):
-                added = datetime.fromisoformat(added_str)
-            else:
-                try:
-                    added = datetime.strptime(added_str.split('.')[0], "%Y-%m-%dT%H:%M:%S")
-                except ValueError:
-                    added = datetime.strptime(added_str.split('.')[0], "%Y-%m-%dT%H:%M")
+            # Attempt to parse ISO 8601 format directly
+            added = datetime.fromisoformat(added_str)
+            if added.tzinfo is None:
                 added = added.replace(tzinfo=datetime.now().astimezone().tzinfo)
-        except ValueError as e:
-            added = datetime.now().astimezone()
-            print(f"Errore nel parsing della data 'added' '{added_str}': {e}. Usata data corrente.")
+        except ValueError:
+            # Fallback to other formats if ISO parsing fails
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", 
+                        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+                try:
+                    # Strip sub-second precision if not supported by format
+                    added_str_to_parse = added_str
+                    if "%f" not in fmt and "." in added_str_to_parse:
+                        added_str_to_parse = added_str_to_parse.split('.')[0]
+                    
+                    added = datetime.strptime(added_str_to_parse, fmt)
+                    if added.tzinfo is None: # Make naive datetime aware
+                        added = added.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                    break 
+                except ValueError:
+                    continue
+            if added is None: # If all parsing attempts fail
+                logger.error(f"Error parsing 'added' date '{added_str}'. Using current UTC time.")
+                added = datetime.now(timezone.utc)
 
-        # Parsing del campo 'read'
+
         read_value = None
         read_data = data.get('read')
-        if read_data and isinstance(read_data, str) and read_data.strip():  # Usa .get() per sicurezza
-            read_str = str(read_data) # Ensure it's a string
+        if read_data and isinstance(read_data, str) and read_data.strip():
+            read_str = str(read_data)
             try:
-                if 'T' in read_str:  # Formato ISO
-                    read_dt = datetime.fromisoformat(read_str)
-                    if read_dt.tzinfo is None:
-                        read_dt = read_dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-                    read_value = read_dt.strftime("%Y-%m-%d %H:%M")
-                else:  # Formato UI diretto (YYYY-MM-DD HH:MM)
-                    read_value = read_str  # Assume già nel formato corretto
-            except ValueError as e:
-                print(f"Errore nel parsing della data 'read' '{read_str}': {e}")
-                read_value = None
-
+                read_value = datetime.fromisoformat(read_str)
+                if read_value.tzinfo is None:
+                    read_value = read_value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            except ValueError:
+                try:
+                    read_value = datetime.strptime(read_str, "%Y-%m-%d %H:%M")
+                    if read_value.tzinfo is None: # Make naive datetime aware
+                        read_value = read_value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                except ValueError as e:
+                    logger.warning(f"Error parsing 'read' date '{read_str}': {e}. Setting to None.")
+                    read_value = None
+        
         return cls(
             uuid=data['uuid'],
             author=data['author'],
@@ -70,19 +85,36 @@ class Book:
         )
 
     def to_dict(self) -> Dict:
-        # Formatta added mantenendo microsecondi e timezone
-        added_iso = self.added.isoformat()
+        # Ensure 'added' is always a datetime object before calling isoformat
+        if not isinstance(self.added, datetime):
+            # This case should ideally not happen if from_dict is correct
+            # and added is always initialized properly.
+            # For robustness, convert to datetime if it's a string, or handle error
+            logger = logging.getLogger(__name__)
+            logger.error(f"Book.added is not a datetime object: {self.added}. Attempting conversion or defaulting.")
+            # Attempt to parse if string, otherwise, this indicates a deeper issue
+            if isinstance(self.added, str):
+                try:
+                    self.added = datetime.fromisoformat(self.added)
+                    if self.added.tzinfo is None:
+                         self.added = self.added.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                except ValueError:
+                    self.added = datetime.now(timezone.utc) # Fallback
+            else: # Not a string, not a datetime - critical issue
+                 self.added = datetime.now(timezone.utc)
 
-        # Formatta read nello stesso formato se presente
+
+        added_iso = self.added.isoformat()
         read_iso = None
-        if self.read:
-            try:
-                # Converti dalla stringa UI a datetime
-                read_dt = datetime.strptime(self.read, "%Y-%m-%d %H:%M")
-                read_dt = read_dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-                read_iso = read_dt.isoformat()
-            except ValueError:
-                read_iso = None # Or log error, or re-raise
+        if self.read is not None:
+            if isinstance(self.read, datetime):
+                read_iso = self.read.isoformat()
+            else:
+                # This case implies self.read was not converted to datetime correctly
+                # or was set to a non-datetime, non-None value.
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Book.read is not a datetime object: {self.read}. Storing as None.")
+                read_iso = None # Or handle as an error case
 
         return {
             'uuid': self.uuid,
@@ -100,14 +132,21 @@ class Book:
 
     @property
     def formatted_date(self) -> str:
-        """Formatta la data senza microsecondi per la visualizzazione"""
-        return self.added.strftime("%Y-%m-%d %H:%M:%S")  # Esclude microsecondi
+        """Formats the date for display, excluding microseconds."""
+        # Ensure self.added is a datetime object before formatting
+        if isinstance(self.added, datetime):
+            return self.added.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            # This case should ideally not happen. Log an error or return a default.
+            logger = logging.getLogger(__name__)
+            logger.error(f"Book.added is not a datetime object: {self.added} in formatted_date. Returning empty string.")
+            return "" # Or raise an error, or return a sensible default
 
     @classmethod
     def parse_ui_date(cls, date_str: str) -> datetime:
-        """Converte dal formato dell'interfaccia (Y-m-d H:M) a datetime con timezone"""
-        return datetime.strptime(date_str, "%Y-%m-%d %H:%M").replace(
-            tzinfo=datetime.now().astimezone().tzinfo)
+        """Converts a date string from UI format (Y-m-d H:M) to a timezone-aware datetime object."""
+        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+        return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
 
 ######################################################################################################
 #
@@ -115,32 +154,33 @@ class Book:
 #
 ######################################################################################################
 class TagsManager:
+    """Manages tags in the TinyDB database."""
     def __init__(self, library_root_path: str, db_file_name: str):
-        self.db = tinydb.TinyDB(f"{library_root_path}/{db_file_name}")
+        self.db = tinydb.TinyDB(str(Path(library_root_path) / db_file_name))
         self.tags_table = self.db.table('tags')
         self._cache = None
         self._dirty = True
 
     def _ensure_cache(self):
-        """Carica la cache se è obsoleta o non esiste"""
+        """Loads the cache if it's outdated or doesn't exist."""
         if self._dirty or self._cache is None:
             self._cache = {tag.doc_id: tag for tag in self.tags_table.all()}
             self._dirty = False
 
     def get_all_tags(self) -> Dict[int, Dict[str, Any]]:
-        """Ottiene tutti i tag dalla cache"""
+        """Gets all tags from the cache."""
         self._ensure_cache()
         return self._cache.copy()
 
     def get_all_tag_names(self) -> List[str]:
-        """Ottiene una lista di nomi di tag unici e ordinati."""
+        """Gets a list of unique and sorted tag names."""
         self._ensure_cache()
         if not self._cache:
             return []
         return sorted(list(set(tag_data['name'] for tag_data in self._cache.values() if 'name' in tag_data)))
 
     def get_tag_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Ottiene un tag specifico per nome"""
+        """Gets a specific tag by name."""
         self._ensure_cache()
         for tag in self._cache.values():
             if tag['name'] == name:
@@ -148,34 +188,35 @@ class TagsManager:
         return None
 
     def add_tag(self, name: str, icon: str) -> int:
-        """Aggiunge un nuovo tag"""
+        """Adds a new tag."""
         tag_id = self.tags_table.insert({'name': name, 'icon': icon})
         self._dirty = True
         return tag_id
 
     def update_tag(self, tag_id: int, new_data: Dict[str, Any]):
-        """Aggiorna un tag esistente"""
+        """Updates an existing tag."""
         self.tags_table.update(new_data, doc_ids=[tag_id])
         self._dirty = True
 
     def remove_tag(self, tag_id: int):
-        """Rimuove un tag"""
+        """Removes a tag."""
         self.tags_table.remove(doc_ids=[tag_id])
         self._dirty = True
 
     def close(self):
-        """Chiude la connessione al database"""
+        """Closes the database connection and clears the cache."""
         self.db.close()
         self._cache = None
         self._dirty = True
 
 #####################################################################################################
 #                                       BookManager
-#                    Gestisce l'interazione con il database TinyDB per i libri
+#                    Manages interaction with the TinyDB database for books.
 #####################################################################################################
 class BookManager:
+    """Manages books in the TinyDB database."""
     def __init__(self, library_root_path: str, db_file_name: str, tags_manager: Optional[TagsManager] = None): # Made Optional explicit
-        self.db = tinydb.TinyDB(f"{library_root_path}/{db_file_name}")
+        self.db = tinydb.TinyDB(str(Path(library_root_path) / db_file_name))
         self.books_table = self.db.table('books')
         self._cache = None
         self._dirty = True
@@ -187,32 +228,32 @@ class BookManager:
         return self._library_root
 
     def _ensure_cache(self):
-        """Carica la cache se è obsoleta o non esiste"""
+        """Loads the cache if it's outdated or doesn't exist."""
         if self._dirty or self._cache is None:
             self._cache = {book['uuid']: Book.from_dict(book) 
                           for book in self.books_table.all()}
             self._dirty = False
 
     def add_book(self, book: Book):
-        # Validazione nome autore
+        # Validate author name
         is_valid, fs_name = FormValidators.validate_author_name(book.author)
         if not is_valid:
-            raise ValueError(f"Nome autore non valido: {fs_name}")
+            raise ValueError(f"Invalid author name: {fs_name}")
 
-        """Aggiunge un libro al database e invalida la cache"""
+        """Adds a book to the database and invalidates the cache."""
         self.books_table.insert(book.to_dict())
         self._dirty = True
 
     def get_book_path(self, book: Book) -> str:
-        """Restituisce il percorso completo del libro"""
+        """Returns the full path of the book file."""
         if not book.filename:
-            raise ValueError("Il libro non ha un filename associato")
+            raise ValueError("Book has no associated filename")
 
         author_dir = FormValidators.author_to_fsname(book.author)
         return str(Path(self.library_root) / author_dir / book.filename)
 
     def ensure_directory(self, author: str) -> str:
-        """Crea la directory dell'autore se non esiste"""
+        """Creates the author's directory if it doesn't exist."""
         author_dir = FormValidators.author_to_fsname(author)
         author_path = Path(self.library_root) / author_dir
         return FileSystemHandler.ensure_directory_exists(str(author_path))
@@ -220,65 +261,122 @@ class BookManager:
 
 ################### UPDATE BOOK ###########################
     def update_book(self, uuid: str, new_data: Dict):
-        """Aggiorna un libro esistente e invalida la cache"""
+        """Updates an existing book and invalidates the cache."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"BookManager.update_book - Attempting to update book with UUID: {uuid}. Incoming data: {new_data}")
         q = tinydb.Query()
-        if 'added' in new_data and isinstance(new_data['added'], str):
-            new_data['added'] = datetime.strptime(
-                new_data['added'], "%Y-%m-%dT%H:%M:%S%z").isoformat()
+        
+        # Process 'added' field
+        if 'added' in new_data:
+            if isinstance(new_data['added'], datetime):
+                new_data['added'] = new_data['added'].isoformat()
+            elif isinstance(new_data['added'], str):
+                # Attempt to parse if it's a string, assuming ISO 8601 or fallback
+                try:
+                    dt = datetime.fromisoformat(new_data['added'])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                    new_data['added'] = dt.isoformat()
+                except ValueError:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Invalid date string for 'added' in update_book: {new_data['added']}. Keeping original or consider error handling.")
+                    # Decide on error handling: raise error, log and skip, or try other parsing
+            # If it's neither datetime nor string, it might be an issue depending on input types
 
-        # Converti il campo read nel formato corretto se presente
-        if 'read' in new_data and isinstance(new_data['read'], str) and new_data['read'].strip():
-            try:
-                # Converti dalla stringa UI a datetime con timezone
-                read_dt = datetime.strptime(new_data['read'], "%Y-%m-%d %H:%M")
-                read_dt = read_dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-                new_data['read'] = read_dt.isoformat()
-            except ValueError:
-                # Se non è nel formato UI, assumi sia già nel formato ISO
-                if 'T' in new_data['read']:  # Sembra già ISO
+        # Process 'read' field
+        if 'read' in new_data:
+            if isinstance(new_data['read'], datetime):
+                new_data['read'] = new_data['read'].isoformat()
+            elif isinstance(new_data['read'], str):
+                if not new_data['read'].strip(): # Empty string
+                    new_data['read'] = None
+                else:
+                    # Attempt to parse if it's a non-empty string
                     try:
+                        # Try ISO format first
                         dt = datetime.fromisoformat(new_data['read'])
-                        if not dt.tzinfo:
-                            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                        if dt.tzinfo is None:
+                             dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
                         new_data['read'] = dt.isoformat()
                     except ValueError:
-                        new_data['read'] = None # Invalid ISO
-                else:
-                    new_data['read'] = None # Not UI, not ISO
-        elif 'read' in new_data and not new_data['read']: # Handle empty string for read
-            new_data['read'] = None
+                        # Fallback to UI format if ISO fails
+                        try:
+                            dt = Book.parse_ui_date(new_data['read']) # Uses the class method
+                            new_data['read'] = dt.isoformat()
+                        except ValueError:
+                            logger = logging.getLogger(__name__)
+                            logger.warning(f"Invalid date string for 'read' in update_book: {new_data['read']}. Setting to None.")
+                            new_data['read'] = None
+            elif new_data['read'] is None:
+                pass # Already None, which is the desired state for storage
+            else: # Not datetime, not string, not None
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Unexpected type for 'read' in update_book: {type(new_data['read'])}. Setting to None.")
+                new_data['read'] = None
 
+        # Granular logging for 'filename' field processing
+        if 'filename' in new_data:
+            logger.debug(f"BookManager.update_book - Filename field present. Type before conversion check: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+            if isinstance(new_data['filename'], Path):
+                logger.debug(f"BookManager.update_book - Attempting to convert filename from Path object.")
+                new_data['filename'] = str(new_data['filename'])
+                logger.debug(f"BookManager.update_book - Filename field converted. Type after conversion: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+            else:
+                logger.debug(f"BookManager.update_book - Filename field is present but not a Path object. Type: {type(new_data['filename'])}, Value: {repr(new_data['filename'])}")
+        else:
+            logger.debug("BookManager.update_book - Filename field not in new_data.")
 
+        logger.debug(f"BookManager.update_book - Data before TinyDB update operation: {new_data}")
         self.books_table.update(new_data, q.uuid == uuid)
         self._dirty = True
 #################################################################
 
 ################### REMOVE BOOK ###########################
     def remove_book(self, uuid: str):
-        """Rimuove un libro dal database e invalida la cache"""
+        """Removes a book from the database and invalidates the cache."""
         BookQuery = tinydb.Query()
         self.books_table.remove(BookQuery.uuid == uuid)
         self._dirty = True
 
     def get_book(self, uuid: str) -> Optional[Book]:
-        """Ottiene un libro specifico per UUID dalla cache"""
+        """Gets a specific book by UUID from the cache."""
         self._ensure_cache()
         return self._cache.get(uuid)
 
     def get_all_books(self) -> List[Book]:
-        """Ottiene tutti i libri dalla cache"""
+        """Gets all books from the cache."""
         self._ensure_cache()
         return list(self._cache.values())
     
     def get_all_author_names(self) -> List[str]:
-        """Ottiene una lista di nomi di autori unici e ordinati."""
+        """Gets a list of unique and sorted author names."""
         self._ensure_cache()
         if not self._cache:
             return []
         return sorted(list(set(book.author for book in self._cache.values() if book.author)))
 
+    def get_all_series_names(self) -> List[str]:
+        """Gets a list of unique and sorted series names."""
+        self._ensure_cache()
+        if not self._cache:
+            return []
+        
+        series_names = set()
+        for book in self._cache.values():
+            if book.series and book.series.strip():
+                series_names.add(book.series)
+        return sorted(list(series_names))
+
+    def get_books_by_series(self, series_name: str) -> List[Book]:
+        """Gets a list of books belonging to a specific series."""
+        self._ensure_cache()
+        if not self._cache:
+            return []
+        
+        return [book for book in self._cache.values() if book.series == series_name]
+
     def search_books_by_text(self, text: str) -> List[Book]:
-        """Cerca libri per testo in titolo o autore"""
+        """Searches books by text in title or author."""
         if not text:
             return self.get_all_books()
             
@@ -293,12 +391,13 @@ class BookManager:
 
 ################### SORT BOOKS ###########################
     def sort_books(self, field: str, reverse: bool = None) -> List[Book]:
+        """Sorts books by a given field."""
         books = self.get_all_books()
 
         if not books:
             return []
 
-        # Se reverse è None, usa un valore predefinito in base al campo
+        # If reverse is None, use a default value based on the field
         if reverse is None:
             reverse = False if field != 'added' else True
 
@@ -312,7 +411,7 @@ class BookManager:
         return books
 
     def close(self):
-        """Chiude la connessione al database e pulisce la cache"""
+        """Closes the database connection and clears the cache."""
         self.db.close()
         self._cache = None
         self._dirty = True
@@ -323,17 +422,17 @@ class BookManager:
 #
 ######################################################################
 class LibraryManager:
-    """Contenitore per BookManager e TagsManager"""
+    """Container for BookManager and TagsManager."""
 
     def __init__(self, library_root_path: str, db_file_name: str):
         self._library_root_path = library_root_path
         self._db_file_name = db_file_name
-        self.__book_manager: Optional[BookManager] = None # Type hint for clarity
-        self.__tags_manager: Optional[TagsManager] = None # Type hint for clarity
+        self.__book_manager: Optional[BookManager] = None
+        self.__tags_manager: Optional[TagsManager] = None
     
     @property
     def books(self) -> BookManager:
-        """Accesso al BookManager"""
+        """Access to the BookManager instance."""
         if self.__book_manager is None:
             # Ensure TagsManager is initialized first if needed by BookManager
             self.__book_manager = BookManager(
@@ -345,13 +444,13 @@ class LibraryManager:
     
     @property
     def tags(self) -> TagsManager:
-        """Accesso al TagsManager"""
+        """Access to the TagsManager instance."""
         if self.__tags_manager is None:
             self.__tags_manager = TagsManager(self._library_root_path, self._db_file_name)
         return self.__tags_manager
     
     def close(self):
-        """Chiude tutte le connessioni"""
+        """Closes all manager connections."""
         if self.__book_manager:
             self.__book_manager.close()
         if self.__tags_manager:

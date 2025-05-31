@@ -6,7 +6,7 @@ from textual.widgets import Input, Button, Header, Footer, Label
 
 from configmanager import ConfigManager
 
-class Settings(Screen):
+class SettingsScreen(Screen):
     BINDINGS = [
         ("escape", "back", "Torna indietro"),
     ]

@@ -3,73 +3,66 @@ from textual.widgets import DataTable
 
 
 class DataTableBook(DataTable):
+    """A DataTable widget specialized for displaying book information."""
     def on_mount(self):
-        self.add_column("Aggiunto", width=10)
-        self.add_column("Autore", width=25)
-        self.add_column("Titolo", width=90)
-        self.add_column("Letto", width=5)
+        """Sets up the table columns when the widget is mounted."""
+        self.add_column("Added", width=10)      # Column for "Aggiunto"
+        self.add_column("Author", width=25)     # Column for "Autore"
+        self.add_column("Title", width=90)      # Column for "Titolo"
+        self.add_column("Series", width=30)     # Column for "Series"
+        self.add_column("Read", width=5)        # Column for "Letto"
         self.add_column("Tags", width=30)
         self.cursor_type = "row"
-        self._current_uuid = 0
-        self._last_clicked_column = "added"
+        self._current_uuid = 0 # Stores the UUID of the currently highlighted/selected row
 
-    def update_table(self, books, formatted_tags: Optional[List[str]] = None):
+    def update_table(self, books):
+        """Clears and repopulates the table with a list of book objects."""
         self.clear()
 
         if not books: # Handle empty book list
              return
 
-        # Ensure formatted_tags list matches books list length if provided
-        if formatted_tags and len(formatted_tags) != len(books):
-             # Fallback or error - let's fallback to raw tags for safety
-             print("Warning: Mismatch between books and formatted_tags count. Falling back to raw tags.")
-             formatted_tags = None # Reset to None
-
         for i, b in enumerate(books):
-            read_date = "—"  # Valore predefinito
-            if b.read is not None and len(b.read) > 0:
+            read_date = "—"  # Default value for read status
+            if b.read is not None: # If 'read' field has a value (datetime object), mark as read
                 read_date = "X"
 
-            added_date = b.added.strftime("%Y-%m-%d")
-            # tags_display = formatted_tags[i] if formatted_tags else ", ".join(b.tags)
-            tags_display = ", ".join(b.tags)
+            added_date = b.added.strftime("%Y-%m-%d") # Format added date
+            tags_display = ", ".join(b.tags) # Join tags into a comma-separated string
 
+            series_display = "—"
+            if b.series:
+                if b.num_series is not None:
+                    if isinstance(b.num_series, float) and b.num_series.is_integer():
+                        series_display = f"{b.series} [{int(b.num_series)}]"
+                    else:
+                        series_display = f"{b.series} [{b.num_series}]"
+                else:
+                    series_display = b.series
+            
             self.add_row(
                 added_date,
                 b.author,
                 b.title,
+                series_display,
                 read_date,
                 tags_display,
-                key=b.uuid
+                key=b.uuid # Use book's UUID as the row key
             )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Event handler for when a row is highlighted."""
         if event.row_key.value is not None:
             self._current_uuid = event.row_key.value
 
-    def on_data_table_header_selected(self, event):
-        column_mapping = {
-            0: "added",
-            1: "author",
-            2: "title",
-            3: "read",
-            4: "tags"
-        }
-
-        self.sort_field = column_mapping.get(event.column_index, "added")
-        self.sort_reverse = False
-        self.update_table()
-
     @property
     def current_column(self) -> Optional[int]:
+        """Gets the index of the currently focused column, if any."""
         if self.cursor_row is not None and self.cursor_column is not None:
             return self.cursor_column
         return None
 
     @property
     def current_uuid(self):
+        """Gets the UUID of the currently highlighted/selected row."""
         return self._current_uuid
-
-    @property
-    def last_clicked_column(self):
-        return self._last_clicked_column
