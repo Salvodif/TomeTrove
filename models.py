@@ -265,6 +265,21 @@ class BookManager:
         logger = logging.getLogger(__name__)
         logger.debug(f"BookManager.update_book - Attempting to update book with UUID: {uuid}. Incoming data: {new_data}")
         q = tinydb.Query()
+
+        # Get old book object before updating
+        old_book_obj = self.get_book(uuid) # Changed from get_book_by_uuid
+        if not old_book_obj:
+            logger.error(f"BookManager.update_book - Book with UUID {uuid} not found. Cannot update.")
+            raise ValueError(f"Book with UUID {uuid} not found.")
+
+        # old_book_data variable is removed as old_book_obj is now the Book instance
+        try:
+            old_file_path = self.get_book_path(old_book_obj)
+            logger.debug(f"BookManager.update_book - Old file path: {old_file_path}")
+        except ValueError as e:
+            # This can happen if the book has no filename, which is possible.
+            old_file_path = None
+            logger.warning(f"BookManager.update_book - Could not determine old file path for book {uuid}: {e}")
         
         # Process 'added' field
         if 'added' in new_data:
@@ -329,6 +344,71 @@ class BookManager:
         logger.debug(f"BookManager.update_book - Data before TinyDB update operation: {new_data}")
         self.books_table.update(new_data, q.uuid == uuid)
         self._dirty = True
+
+        # After updating, check if title or author changed to rename file
+        new_title = new_data.get('title', old_book_obj.title)
+        new_author = new_data.get('author', old_book_obj.author)
+
+        title_changed = new_title != old_book_obj.title
+        author_changed = new_author != old_book_obj.author
+
+        if (title_changed or author_changed) and old_file_path and old_book_obj.filename:
+            logger.info(f"BookManager.update_book - Title or author changed for book {uuid}. Attempting to rename file.")
+
+            # Preserve file extension
+            old_filename_path = Path(old_book_obj.filename)
+            file_extension = old_filename_path.suffix
+
+            new_filename_stem = FormValidators.title_to_fsname(new_title)
+            new_filename = f"{new_filename_stem}{file_extension}"
+            logger.debug(f"BookManager.update_book - New filename generated: {new_filename}")
+
+            self.ensure_directory(new_author) # Ensures new author's directory exists
+
+            new_author_dir = FormValidators.author_to_fsname(new_author)
+            new_file_path = str(Path(self.library_root) / new_author_dir / new_filename)
+            logger.debug(f"BookManager.update_book - New file path: {new_file_path}")
+
+            try:
+                if Path(old_file_path).exists():
+                    FileSystemHandler.rename_file(old_file_path, new_file_path)
+                    logger.info(f"BookManager.update_book - File renamed from {old_file_path} to {new_file_path}")
+
+                    # Update filename in database
+                    self.books_table.update({'filename': new_filename}, q.uuid == uuid)
+                    logger.debug(f"BookManager.update_book - Database updated with new filename: {new_filename} for book {uuid}")
+                else:
+                    logger.warning(f"BookManager.update_book - Old file path {old_file_path} does not exist. Skipping rename. Book {uuid} might need filename updated manually if it was created without one.")
+                    # If the old file didn't exist, but title/author change implies a new filename,
+                    # we should still update the filename in the DB.
+                    # This handles cases where a book is created, then immediately edited (title/author)
+                    # before a file is associated, or if a file was expected but missing.
+                    if old_book_obj.filename != new_filename : # only update if it's different
+                        self.books_table.update({'filename': new_filename}, q.uuid == uuid)
+                        logger.info(f"BookManager.update_book - Database updated with new filename: {new_filename} for book {uuid} (old file did not exist).")
+
+            except RuntimeError as e:
+                logger.error(f"BookManager.update_book - Error renaming file for book {uuid}: {e}")
+                # Potentially revert other changes or log for manual intervention
+            except Exception as e:
+                logger.error(f"BookManager.update_book - Unexpected error during file rename or DB update for book {uuid}: {e}")
+        elif (title_changed or author_changed) and not old_book_obj.filename:
+            # Case: Title/author changed, but there was no old filename.
+            # We should generate the new filename and save it to the DB.
+            logger.info(f"BookManager.update_book - Title or author changed for book {uuid}, but no old filename was set. Generating and setting new filename.")
+            file_extension = new_data.get('file_extension', '.epub') # Default or get from new_data if available
+            if not isinstance(file_extension, str) or not file_extension.startswith('.'):
+                logger.warning(f"BookManager.update_book - Invalid or missing file_extension for new filename generation, defaulting to .epub for book {uuid}")
+                file_extension = '.epub' # Ensure it's a valid extension format
+
+            new_filename_stem = FormValidators.title_to_fsname(new_title)
+            new_filename = f"{new_filename_stem}{file_extension}"
+            logger.debug(f"BookManager.update_book - New filename for book without previous file: {new_filename}")
+
+            self.books_table.update({'filename': new_filename}, q.uuid == uuid)
+            logger.info(f"BookManager.update_book - Database updated with new filename: {new_filename} for book {uuid} (no old file).")
+            # No actual file to rename, but the metadata should reflect the new naming convention.
+            # The actual file can be uploaded/associated later.
 #################################################################
 
 ################### REMOVE BOOK ###########################
