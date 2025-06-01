@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 import logging
+from functools import cmp_to_key
 
 from formvalidators import FormValidators
 from filesystem import FileSystemHandler
@@ -538,22 +539,127 @@ class BookManager:
 
 ################### SORT BOOKS ###########################
     def sort_books(self, field: str, reverse: bool = None) -> List[Book]:
-        """Sorts books by a given field."""
         books = self.get_all_books()
-
         if not books:
             return []
 
-        # If reverse is None, use a default value based on the field
-        if reverse is None:
-            reverse = False if field != 'added' else True
+        logger = logging.getLogger(__name__)
 
         if field == 'added':
-            books.sort(key=lambda x: x.added, reverse=reverse)
-        elif hasattr(books[0], field):
-            # Handle cases where field might be None for some books during sort
-            books.sort(key=lambda x: str(getattr(x, field) or '').lower() if isinstance(getattr(x, field), str) else getattr(x, field), reverse=reverse)
 
+            def compare_books(book1: Book, book2: Book):
+                # 1. Sort by 'added' (descending)
+                # Ensure 'added' is datetime, handle if not (though from_dict should ensure this)
+                b1_added = book1.added if isinstance(book1.added, datetime) else datetime.min.replace(tzinfo=timezone.utc)
+                b2_added = book2.added if isinstance(book2.added, datetime) else datetime.min.replace(tzinfo=timezone.utc)
+
+                # Ensure timezone awareness for comparison if one is aware and other is naive (should not happen with current from_dict)
+                if (b1_added.tzinfo is None and b2_added.tzinfo is not None):
+                    b1_added = b1_added.replace(tzinfo=timezone.utc) # Assuming UTC for safety
+                if (b2_added.tzinfo is None and b1_added.tzinfo is not None):
+                    b2_added = b2_added.replace(tzinfo=timezone.utc)
+
+
+                if b1_added < b2_added: return 1
+                if b1_added > b2_added: return -1
+
+                # At this point, book1.added == book2.added
+                is_series1 = bool(book1.series and book1.series.strip() and book1.num_series is not None)
+                is_series2 = bool(book2.series and book2.series.strip() and book2.num_series is not None)
+
+                if is_series1 and is_series2:
+                    # Both are series books
+                    # 2a. Sort by num_series (ascending)
+                    # Ensure num_series are float for comparison
+                    try:
+                        num1 = float(book1.num_series)
+                        num2 = float(book2.num_series)
+                        if num1 < num2: return -1
+                        if num1 > num2: return 1
+                    except (ValueError, TypeError):
+                        # Handle cases where num_series might not be a valid number
+                        # This case implies data inconsistency. Sort non-numeric num_series last.
+                        if isinstance(book1.num_series, (int, float)) and not isinstance(book2.num_series, (int, float)): return -1
+                        if not isinstance(book1.num_series, (int, float)) and isinstance(book2.num_series, (int, float)): return 1
+                        # If both are non-numeric or conversion failed for both, proceed to next criteria
+
+
+                    # 2b. Sort by series name (ascending, case-insensitive)
+                    series1_lower = (book1.series or "").lower()
+                    series2_lower = (book2.series or "").lower()
+                    if series1_lower < series2_lower: return -1
+                    if series1_lower > series2_lower: return 1
+
+                    # 2c. Sort by title (ascending, case-insensitive)
+                    title1_lower = (book1.title or "").lower()
+                    title2_lower = (book2.title or "").lower()
+                    if title1_lower < title2_lower: return -1
+                    if title1_lower > title2_lower: return 1
+                    return 0
+
+                elif is_series1: # book1 is series, book2 is not
+                    return -1 # Series books come before non-series books
+
+                elif is_series2: # book2 is series, book1 is not
+                    return 1  # Non-series books come after series books
+
+                else: # Both are non-series books
+                    # 2d. Sort by title (ascending, case-insensitive)
+                    title1_lower = (book1.title or "").lower()
+                    title2_lower = (book2.title or "").lower()
+                    if title1_lower < title2_lower: return -1
+                    if title1_lower > title2_lower: return 1
+                    return 0
+
+            # For 'added' field, the problem implies reverse is True by default (newest first)
+            # The compare_books function is already set for descending on 'added'.
+            # If `reverse` parameter is explicitly False for 'added', we would need to invert the compare_books logic or results.
+            # However, the original logic for `reverse is None` was `True` for 'added'.
+            # So, if `reverse` is True or None, use compare_books as is. If `reverse` is False, we need to sort ascending.
+
+            # The custom compare_books function sorts 'added' descending.
+            # If reverse=False (meaning ascending for 'added'), we need to flip the result of compare_books.
+            if reverse is False: # Explicit request for ascending 'added'
+                 books.sort(key=cmp_to_key(lambda b1, b2: -1 * compare_books(b1, b2)))
+            else: # Default (reverse=True or None) for 'added' means descending
+                 books.sort(key=cmp_to_key(compare_books))
+
+
+        elif hasattr(books[0], field) if books else False:
+            actual_reverse = reverse if reverse is not None else False # Default to ascending for other fields
+
+            def get_sort_key(b: Book):
+                val = getattr(b, field, None)
+                is_first_book_attr_str = isinstance(getattr(books[0], field, None), str) if books else False
+
+                if isinstance(val, str):
+                    return (val or "").lower()
+                if val is None:
+                    if is_first_book_attr_str: # If the attribute type is generally string
+                        return "" # Sort None strings as empty strings
+                    # For non-string types, place Nones consistently
+                    # To sort Nones last in ascending: return a type-appropriate max value or tuple
+                    # To sort Nones first in ascending: return a type-appropriate min value or tuple
+                    # Current logic: sort Nones first for non-str types in ascending if not handled explicitly
+                    # Let's refine to sort Nones last for numeric/datetime
+                    if isinstance(getattr(books[0], field, None), (int, float)):
+                         return float('inf') if not actual_reverse else float('-inf')
+                    if isinstance(getattr(books[0], field, None), datetime):
+                         return datetime.max.replace(tzinfo=timezone.utc) if not actual_reverse else datetime.min.replace(tzinfo=timezone.utc)
+                    return None # Python's default None handling (usually sorts them first)
+                return val
+
+            try:
+                books.sort(key=get_sort_key, reverse=actual_reverse)
+            except TypeError as e:
+                logger.error(f"TypeError during sorting by field '{field}': {e}. List may be partially sorted or unsorted. Attempting naive sort for '{field}'.")
+                try:
+                    # Fallback to direct attribute access, hoping Python handles mixed types or Nones more gracefully (or fails similarly)
+                    books.sort(key=lambda x: getattr(x, field, None), reverse=actual_reverse)
+                except Exception as e_naive:
+                    logger.error(f"Naive sort also failed for field '{field}': {e_naive}")
+        else:
+            logger.warning(f"Sort field '{field}' not found on Book objects or book list is empty. Returning unsorted list.")
 
         return books
 
