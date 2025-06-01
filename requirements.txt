@@ -2,3 +2,4 @@ textual
 tinydb
 textual-autocomplete
 unidecode==1.4.0
+rich>=13.0.0
