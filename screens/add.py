@@ -10,7 +10,10 @@ from textual.screen import Screen
 from textual.app import ComposeResult
 from textual.containers import Vertical, Horizontal
 from textual.markup import escape
-from textual.widgets import Header, Footer, Label, DirectoryTree, Button
+from textual.widgets import Header, Footer, Label, DirectoryTree, Button, Input # Added Input
+
+from textual_autocomplete import AutoComplete # AutoComplete needed for SeriesSelectedInternalMessage type hint
+from widgets.bookform import SeriesSelectedInternalMessage # Added new message import
 
 from tools.logger import AppLogger
 from messages import BookAdded
@@ -30,6 +33,7 @@ class AddScreen(Screen):
 
         all_authors: List[str] = []
         all_tags: List[str] = []
+        all_series: List[str] = []
 
         try:
             all_authors = self.bookmanager.get_all_author_names()
@@ -44,16 +48,23 @@ class AddScreen(Screen):
         else:
             self.logger.warning("TagsManager not available in BookManager; tag autocompletion will be empty.")
 
+        try:
+            all_series = self.bookmanager.get_all_series_names()
+        except Exception as e:
+            self.logger.error(f"Failed to get series names for autocomplete: {e}")
+
         self.form = BookForm(
             start_directory=start_directory,
             add_new_book=True,
             all_authors=all_authors,
-            all_tags=all_tags
+            all_tags=all_tags,
+            all_series=all_series
             )
 
         # The actual AutoComplete widgets are now part of BookForm's attributes
         self.author_autocomplete_widget = self.form.author_autocomplete
         self.tags_autocomplete_widget = self.form.tags_autocomplete
+        self.series_autocomplete_widget = self.form.series_autocomplete
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -63,6 +74,7 @@ class AddScreen(Screen):
         # Yield autocomplete widgets separately as they are not part of form_container
         yield self.author_autocomplete_widget
         yield self.tags_autocomplete_widget
+        yield self.series_autocomplete_widget
 
         yield Horizontal(
             self.form.save_button,
@@ -212,3 +224,64 @@ class AddScreen(Screen):
 
     def action_back(self):
         self.app.pop_screen()
+
+    async def _suggest_next_series_number(self, series_name: Optional[str]) -> None:
+        if series_name and series_name.strip() and not self.form.num_series_input.value.strip():
+            try:
+                books_in_series = self.bookmanager.get_books_by_series(series_name.strip())
+                if not books_in_series:
+                    self.form.num_series_input.value = "1"
+                    self.notify(f"Suggerito il numero 1 per la nuova serie '{series_name.strip()}'.")
+                    return
+
+                max_num_series = 0
+                found_valid_num = False
+                for book in books_in_series:
+                    if book.num_series is not None:
+                        try:
+                            current_num = float(book.num_series)
+                            if current_num > max_num_series:
+                                max_num_series = current_num
+                            found_valid_num = True
+                        except ValueError:
+                            self.logger.warning(f"Libro '{book.title}' nella serie '{series_name.strip()}' ha num_series non valido: {book.num_series}")
+
+                if found_valid_num:
+                    suggested_num = int(max_num_series) + 1
+                    self.form.num_series_input.value = str(suggested_num)
+                    self.notify(f"Suggerito il numero {suggested_num} per la serie '{series_name.strip()}'.")
+                else:
+                    self.form.num_series_input.value = "1"
+                    self.notify(f"Suggerito il numero 1 per la serie '{series_name.strip()}' (nessun libro numerato trovato).")
+
+            except Exception as e:
+                self.logger.error(f"Errore nel suggerire il numero di serie per '{series_name.strip()}': {e}")
+                # Non notificare l'utente per errori interni, solo loggare.
+
+    async def on_series_selected_internal_message(self, message: SeriesSelectedInternalMessage) -> None:
+        # Check if the message came from the series autocomplete widget owned by this screen's form
+        if message.autocomplete_control == self.series_autocomplete_widget:
+            # Ensure a series name is present in the message
+            if message.series_name:
+                await self._suggest_next_series_number(message.series_name)
+
+    @on(Input.Blurred, "#series_input_target") # ID of self.form.series_target_input
+    async def handle_series_input_blur(self, event: Input.Blurred) -> None:
+        series_name = self.form.series_target_input.value
+        # Check if this series actually exists to prevent suggesting for brand new series names
+        # unless the requirement is to suggest "1" for any new series name typed.
+        all_series_names = []
+        try:
+            all_series_names = self.bookmanager.get_all_series_names()
+        except Exception as e:
+            self.logger.error(f"Failed to get series names for blur handler: {e}")
+            # Proceeding without all_series_names means we might suggest "1" for an existing series
+            # if the get_books_by_series call also fails or returns empty. This is acceptable degradation.
+
+        if series_name and series_name.strip():
+            stripped_series_name = series_name.strip()
+            if stripped_series_name in all_series_names:
+                await self._suggest_next_series_number(stripped_series_name)
+            elif not self.form.num_series_input.value.strip(): # New series and num_series is empty
+                self.form.num_series_input.value = "1"
+                self.notify(f"Suggerito il numero 1 per la nuova serie '{stripped_series_name}'.")

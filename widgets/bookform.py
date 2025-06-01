@@ -4,9 +4,16 @@ from textual.app import ComposeResult
 from textual.widgets import Input, Button, TextArea, DirectoryTree, Label, Checkbox
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from datetime import datetime
+from textual.message import Message # Added import
 
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
+
+class SeriesSelectedInternalMessage(Message):
+    def __init__(self, series_name: str, autocomplete_control: AutoComplete) -> None:
+        super().__init__()
+        self.series_name = series_name
+        self.autocomplete_control = autocomplete_control
 
 class AuthorAutoComplete(AutoComplete):
     """An AutoComplete widget for author names."""
@@ -135,6 +142,57 @@ class TagAutoComplete(AutoComplete):
         self.post_completion() # Default behavior hides the dropdown, which is usually fine.
 
 
+class SeriesAutoComplete(AutoComplete):
+    """An AutoComplete widget for series names."""
+    def __init__(self,
+                 target: Input | str,
+                 all_series: List[str],
+                 **kwargs):
+        # Pass None to candidates; we use get_candidates to dynamically fetch them.
+        super().__init__(target, candidates=None, **kwargs)
+        self.all_series = sorted(list(set(all_series if all_series else [])))
+
+    def get_candidates(self, target_state: TargetState) -> list[DropdownItem]:
+        """
+        Called by the AutoComplete widget to get the list of dropdown items
+        based on the current input.
+        """
+        search_string = self.get_search_string(target_state) # Get what the user has typed.
+        if not search_string:
+            return []
+
+        matches: list[DropdownItem] = []
+        for series_name in self.all_series:
+            if series_name.lower().startswith(search_string.lower()):
+                # 'main' is the text displayed in the dropdown.
+                matches.append(DropdownItem(main=series_name))
+        return matches
+
+    def post_completion(self) -> None:
+        # It's crucial to get the value *before* calling super().post_completion()
+        # if super().post_completion() might clear the input or change focus in a way
+        # that makes self.target.value unreliable.
+        # However, the docs say post_completion is called *after* apply_completion,
+        # so the value should be stable in self.target.value.
+
+        selected_series_name = ""
+        # self.target is the Input widget instance in this application's setup
+        if isinstance(self.target, Input):
+            selected_series_name = self.target.value
+        # else:
+            # If self.target could be an ID string, we'd need to query the input:
+            # try:
+            #     input_widget = self.app.query_one(self.target, Input)
+            #     selected_series_name = input_widget.value
+            # except Exception:
+            #     pass # Or log error
+
+        super().post_completion() # Call parent's post_completion (usually hides dropdown)
+
+        if selected_series_name: # Only post if a name was actually retrieved
+            self.post_message(SeriesSelectedInternalMessage(selected_series_name, self))
+
+
 class BookForm:
     """
     A form class (not a direct Textual widget) that composes and manages
@@ -148,10 +206,12 @@ class BookForm:
                  start_directory: str = ".", # Starting directory for file browser in add mode
                  add_new_book: bool = True, # True for Add mode, False for Edit mode
                  all_authors: Optional[List[str]] = None, # List of all authors for autocomplete
-                 all_tags: Optional[List[str]] = None): # List of all tags for autocomplete
+                 all_tags: Optional[List[str]] = None, # List of all tags for autocomplete
+                 all_series: Optional[List[str]] = None): # List of all series for autocomplete
 
         _authors = all_authors if all_authors is not None else []
         _tags = all_tags if all_tags is not None else []
+        _series = all_series if all_series is not None else []
         self.book_data = book # Store the book object if editing
 
         self.author_target_input = Input(placeholder="Author", value=book.author if book else "", classes="form-input", id="author_input_target")
@@ -169,9 +229,16 @@ class BookForm:
             prevent_default_tab=False,
             prevent_default_enter=True
         )
+        self.series_target_input = Input(placeholder="Series", value=book.series if book and book.series else "", classes="form-input", id="series_input_target")
+        self.series_autocomplete = SeriesAutoComplete(
+            target=f"#{self.series_target_input.id}",
+            all_series=_series,
+            prevent_default_tab=False,
+            prevent_default_enter=True,
+            id="form_series_autocomplete" # Added static ID
+        )
 
         self.title_input = Input(placeholder="Title", value=book.title if book else "", classes="form-input")
-        self.series_input = Input(placeholder="Series", value=book.series if book and book.series else "", classes="form-input")
         self.num_series_input = Input(placeholder="Series Number", value=str(book.num_series) if book and book.num_series is not None else "", classes="form-input")
         read_value_str = book.read.strftime("%Y-%m-%d %H:%M") if book and book.read and isinstance(book.read, datetime) else ""
         self.read_input = Input(placeholder="Read Date (YYYY-MM-DD HH:MM)", value=read_value_str, classes="form-input")
@@ -208,7 +275,7 @@ class BookForm:
             Horizontal(Label("Title:", classes="form-label"), self.title_input, classes="form-row"),
             Horizontal(Label("Author:", classes="form-label"), self.author_target_input, classes="form-row"),
             Horizontal(Label("Tags:", classes="form-label"), self.tags_target_input, classes="form-row"),
-            Horizontal(Label("Series:", classes="form-label"), self.series_input, classes="form-row"),
+            Horizontal(Label("Series:", classes="form-label"), self.series_target_input, classes="form-row"),
             Horizontal(Label("Number:", classes="form-label"), self.num_series_input,classes="form-row"),
         ])
 
@@ -268,7 +335,7 @@ class BookForm:
 
     def get_autocomplete_widgets(self) -> List[AutoComplete]:
         """Helper to get the AutoComplete widgets for the parent screen to compose."""
-        return [self.author_autocomplete, self.tags_autocomplete]
+        return [self.author_autocomplete, self.tags_autocomplete, self.series_autocomplete]
 
     def get_values(self):
         """
@@ -306,7 +373,7 @@ class BookForm:
             'title': self.title_input.value.strip(),
             'author': self.author_target_input.value.strip(),
             'tags': [tag.strip() for tag in self.tags_target_input.value.split(",") if tag.strip()],
-            'series': self.series_input.value.strip() if self.series_input.value.strip() else None,
+            'series': self.series_target_input.value.strip() if self.series_target_input.value.strip() else None,
             'num_series': num_series_value,
             'read': read_value, # This will be a string or None
             'description': self.description_input.text.strip() if self.description_input.text.strip() else None,

@@ -18,7 +18,9 @@ from filesystem import FileSystemHandler # noqa: E402
 # Configure basic logging for tests (optional)
 # logging.basicConfig(level=logging.DEBUG)
 
-class TestBookManagerFileNameUpdates(unittest.TestCase):
+from typing import Optional # Added for type hinting
+
+class TestBookManagerFunctionality(unittest.TestCase): # Renamed class
 
     def setUp(self):
         self.logger = logging.getLogger(__name__)
@@ -75,6 +77,31 @@ class TestBookManagerFileNameUpdates(unittest.TestCase):
         )
         self.book_manager.add_book(self.book_to_add)
         self.logger.debug(f"Added initial book to DB: UUID {self.book_uuid}")
+
+    def _clear_all_books(self):
+        """Helper to remove all books for tests needing a clean slate."""
+        self.logger.debug("Clearing all books from BookManager for test.")
+        all_books = list(self.book_manager.get_all_books()) # Get a copy of the list to iterate
+        for book in all_books:
+            try:
+                # Need to remove the actual file too if it exists,
+                # otherwise remove_book might fail or leave orphaned files.
+                # This is tricky because remove_book itself tries to delete files.
+                # For simplicity in tests, ensure files are removed if they exist,
+                # or that remove_book can handle their absence.
+                # Let's assume remove_book handles file deletion and its absence gracefully for now.
+                # If a file associated with a book from setup doesn't exist, it's fine.
+                # The core of the tests here isn't about file operations of remove_book.
+                self.book_manager.remove_book(book.uuid)
+            except Exception as e:
+                self.logger.warning(f"Error clearing book {book.uuid} for test: {e}")
+        # After removing, re-initialize cache and dirty flag might be good if remove_book doesn't fully reset.
+        # However, a well-behaved remove_book should update the cache.
+        # Let's assume BookManager's remove_book correctly updates its internal state.
+        # Verify by checking if get_all_books is empty.
+        if list(self.book_manager.get_all_books()):
+             self.logger.error("Failed to clear all books for test.")
+             # This might indicate an issue with remove_book or get_all_books after removal.
 
     def tearDown(self):
         self.logger.debug("Tearing down test case...")
@@ -195,6 +222,7 @@ class TestBookManagerFileNameUpdates(unittest.TestCase):
 
     def test_file_extension_preservation(self):
         self.logger.debug("Running test_file_extension_preservation...")
+        # This test uses the initial book setup, so no need to clear.
         # Create a book with a different extension
         ext_book_uuid = "ext-uuid-abcde"
         ext_title = "Extension Test Title Special"
@@ -241,6 +269,168 @@ class TestBookManagerFileNameUpdates(unittest.TestCase):
         self.assertTrue(new_file_path_expected.exists(), f"New file path {new_file_path_expected} with preserved extension does not exist.")
         self.assertFalse(original_ext_book_file_path.exists(), f"Old file path {original_ext_book_file_path} with original extension still exists.")
         self.logger.debug("test_file_extension_preservation completed.")
+
+    def test_get_all_series_names(self):
+        self.logger.debug("Running test_get_all_series_names...")
+        self._clear_all_books() # Ensure a clean slate
+
+        common_added_date = datetime.now(timezone.utc)
+        books_data = [
+            Book(uuid="s1", title="T1", author="A", added=common_added_date, series="Alpha Series", filename="f1.pdf"),
+            Book(uuid="s2", title="T2", author="A", added=common_added_date, series="Beta Series", filename="f2.pdf"),
+            Book(uuid="s3", title="T3", author="A", added=common_added_date, series="Alpha Series", filename="f3.pdf"),
+            Book(uuid="s4", title="T4", author="A", added=common_added_date, series=None, filename="f4.pdf"),
+            Book(uuid="s5", title="T5", author="A", added=common_added_date, series="", filename="f5.pdf"),
+            Book(uuid="s6", title="T6", author="A", added=common_added_date, series="gamma Series", filename="f6.pdf"),
+        ]
+        for book in books_data:
+            # Create dummy files for these books if BookManager.add_book expects them
+            # For this test, we only care about series names, so physical files might not be strictly needed
+            # if add_book allows it or if we bypass file system interactions.
+            # Assuming add_book is robust enough or we ensure necessary file structures if it's strict.
+            # For simplicity, let's assume add_book doesn't strictly require file existence for this metadata test.
+            # If add_book *does* require file existence and tries to manage them, this needs more setup.
+            # Let's assume the focus is on the DB interaction for series names.
+            # To be safe, let's create minimal author dirs and dummy files.
+            author_fsname = FormValidators.author_to_fsname(book.author)
+            author_dir = Path(self.library_root) / author_fsname
+            author_dir.mkdir(parents=True, exist_ok=True)
+            if book.filename:
+                with open(author_dir / book.filename, "w") as f:
+                    f.write("dummy")
+            self.book_manager.add_book(book)
+
+        series_names = self.book_manager.get_all_series_names()
+        self.assertEqual(series_names, ["Alpha Series", "Beta Series", "gamma Series"])
+        self.logger.debug("test_get_all_series_names completed.")
+
+    def test_get_books_by_series(self):
+        self.logger.debug("Running test_get_books_by_series...")
+        self._clear_all_books()
+
+        common_added_date = datetime.now(timezone.utc)
+        book_a1 = Book(uuid="a1", title="Book A1", author="Auth", added=common_added_date, series="Series A", filename="a1.pdf")
+        book_a2 = Book(uuid="a2", title="Book A2", author="Auth", added=common_added_date, series="Series A", filename="a2.pdf")
+        book_b1 = Book(uuid="b1", title="Book B1", author="Auth", added=common_added_date, series="Series B", filename="b1.pdf")
+        book_c1 = Book(uuid="c1", title="Book C1", author="Auth", added=common_added_date, series=None, filename="c1.pdf")
+
+        books_to_add = [book_a1, book_a2, book_b1, book_c1]
+        for book in books_to_add:
+            author_fsname = FormValidators.author_to_fsname(book.author)
+            author_dir = Path(self.library_root) / author_fsname
+            author_dir.mkdir(parents=True, exist_ok=True)
+            if book.filename:
+                with open(author_dir / book.filename, "w") as f:
+                    f.write("dummy")
+            self.book_manager.add_book(book)
+
+        books_a_results = self.book_manager.get_books_by_series("Series A")
+        self.assertEqual(len(books_a_results), 2)
+        result_uuids_a = sorted([b.uuid for b in books_a_results])
+        self.assertEqual(result_uuids_a, ["a1", "a2"])
+
+        books_b_results = self.book_manager.get_books_by_series("Series B")
+        self.assertEqual(len(books_b_results), 1)
+        self.assertEqual(books_b_results[0].uuid, "b1")
+
+        books_none_results = self.book_manager.get_books_by_series("NonExistent Series")
+        self.assertEqual(len(books_none_results), 0)
+
+        books_empty_str_results = self.book_manager.get_books_by_series("")
+        self.assertEqual(len(books_empty_str_results), 0) # Assuming series="" is not a valid query target
+        self.logger.debug("test_get_books_by_series completed.")
+
+    def _get_suggested_next_series_number(self, books_in_series: list[Book], current_book_uuid_to_exclude: Optional[str] = None) -> int:
+        max_num_series = 0.0 # Use float for intermediate calcs
+        found_valid_num = False
+
+        for book in books_in_series:
+            if current_book_uuid_to_exclude and book.uuid == current_book_uuid_to_exclude:
+                continue
+            if book.num_series is not None: # num_series can be str, int, float, or None
+                try:
+                    # Convert to string first to handle various numeric types robustly before float conversion
+                    current_num = float(str(book.num_series))
+                    if current_num > max_num_series:
+                        max_num_series = current_num
+                    found_valid_num = True
+                except (ValueError, TypeError):
+                    # Log this as it might indicate bad data, but don't fail the suggestion.
+                    self.logger.debug(f"Could not parse num_series '{book.num_series}' for book '{book.uuid}' as float.")
+                    pass # Ignore invalid num_series values for max calculation
+
+        if found_valid_num:
+            return int(max_num_series) + 1
+        else:
+            return 1
+
+    def test_suggest_num_new_series(self):
+        self.logger.debug("Running test_suggest_num_new_series...")
+        self.assertEqual(self._get_suggested_next_series_number([]), 1)
+        self.logger.debug("test_suggest_num_new_series completed.")
+
+    def test_suggest_num_existing_series_no_numbers(self):
+        self.logger.debug("Running test_suggest_num_existing_series_no_numbers...")
+        book1 = Book(uuid="s1", title="T1", series="S", num_series=None, author="A", added=datetime.now(timezone.utc), filename="f.pdf")
+        self.assertEqual(self._get_suggested_next_series_number([book1]), 1)
+        self.logger.debug("test_suggest_num_existing_series_no_numbers completed.")
+
+    def test_suggest_num_existing_series_with_numbers(self):
+        self.logger.debug("Running test_suggest_num_existing_series_with_numbers...")
+        dt = datetime.now(timezone.utc)
+        books = [
+            Book(uuid="s1", title="T1", series="S", num_series=1, author="A", added=dt, filename="f1.pdf"),
+            Book(uuid="s2", title="T2", series="S", num_series=2, author="A", added=dt, filename="f2.pdf"),
+            Book(uuid="s3", title="T3", series="S", num_series=4, author="A", added=dt, filename="f3.pdf"),
+        ]
+        self.assertEqual(self._get_suggested_next_series_number(books), 5)
+        self.logger.debug("test_suggest_num_existing_series_with_numbers completed.")
+
+    def test_suggest_num_existing_series_with_float_numbers(self):
+        self.logger.debug("Running test_suggest_num_existing_series_with_float_numbers...")
+        dt = datetime.now(timezone.utc)
+        books = [
+            Book(uuid="s1", title="T1", series="S", num_series=1.0, author="A", added=dt, filename="f1.pdf"),
+            Book(uuid="s2", title="T2", series="S", num_series=2.5, author="A", added=dt, filename="f2.pdf"),
+        ]
+        # int(2.5) + 1 = 2 + 1 = 3
+        self.assertEqual(self._get_suggested_next_series_number(books), 3)
+        self.logger.debug("test_suggest_num_existing_series_with_float_numbers completed.")
+
+    def test_suggest_num_existing_series_with_invalid_numbers(self):
+        self.logger.debug("Running test_suggest_num_existing_series_with_invalid_numbers...")
+        dt = datetime.now(timezone.utc)
+        books = [
+            Book(uuid="s1", title="T1", series="S", num_series="abc", author="A", added=dt, filename="f1.pdf"),
+            Book(uuid="s2", title="T2", series="S", num_series=2.0, author="A", added=dt, filename="f2.pdf"),
+            Book(uuid="s3", title="T3", series="S", num_series=None, author="A", added=dt, filename="f3.pdf"),
+        ]
+        # Max valid is 2.0, so suggests 3
+        self.assertEqual(self._get_suggested_next_series_number(books), 3)
+        self.logger.debug("test_suggest_num_existing_series_with_invalid_numbers completed.")
+
+    def test_suggest_num_edit_mode_excludes_current_book(self):
+        self.logger.debug("Running test_suggest_num_edit_mode_excludes_current_book...")
+        dt = datetime.now(timezone.utc)
+        book1 = Book(uuid="curr", title="Current", series="S", num_series=3.0, author="A", added=dt, filename="fc.pdf")
+        book2 = Book(uuid="oth1", title="Other1", series="S", num_series=1.0, author="A", added=dt, filename="f1.pdf")
+        book3 = Book(uuid="oth2", title="Other2", series="S", num_series=5.0, author="A", added=dt, filename="f2.pdf")
+        self.assertEqual(self._get_suggested_next_series_number([book1, book2, book3], current_book_uuid_to_exclude="curr"), 6)
+
+        book4 = Book(uuid="curr2", title="Current2", series="S", num_series=5.0, author="A", added=dt, filename="fc2.pdf")
+        book5 = Book(uuid="oth3", title="Other3", series="S", num_series=1.0, author="A", added=dt, filename="f3.pdf")
+        self.assertEqual(self._get_suggested_next_series_number([book4, book5], current_book_uuid_to_exclude="curr2"), 2)
+
+        book6 = Book(uuid="curr3", title="Current3", series="S", num_series=1.0, author="A", added=dt, filename="fc3.pdf")
+        self.assertEqual(self._get_suggested_next_series_number([book6], current_book_uuid_to_exclude="curr3"), 1)
+
+        # Test case: current book is the only one with a high number, others are lower or none
+        book7 = Book(uuid="curr4", title="Current4", series="S", num_series=10.0, author="A", added=dt, filename="fc4.pdf")
+        book8 = Book(uuid="oth4", title="Other4", series="S", num_series=2.0, author="A", added=dt, filename="f4.pdf")
+        book9 = Book(uuid="oth5", title="Other5", series="S", num_series=None, author="A", added=dt, filename="f5.pdf")
+        self.assertEqual(self._get_suggested_next_series_number([book7, book8, book9], current_book_uuid_to_exclude="curr4"), 3)
+        self.logger.debug("test_suggest_num_edit_mode_excludes_current_book completed.")
+
 
 if __name__ == '__main__':
     # This allows running the tests directly from this file
