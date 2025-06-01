@@ -5,7 +5,7 @@ from textual.widgets import Input, Button, TextArea, DirectoryTree, Label, Check
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from datetime import datetime
 
-from textual_autocomplete import AutoComplete, DropdownItem, TargetState, Input
+from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
 
 class AuthorAutoComplete(AutoComplete):
