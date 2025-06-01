@@ -1,5 +1,6 @@
 import re
 import platform
+from unidecode import unidecode
 
 class FormValidators:
     @staticmethod
@@ -28,6 +29,21 @@ class FormValidators:
         # Sostituisci spazi multipli con singolo spazio
         normalized = re.sub(r'\s+', ' ', normalized)
         return normalized.strip()
+
+    @staticmethod
+    def series_to_fsname(series_name: str) -> str:
+        """Converts a series name to a filesystem-safe string."""
+        if not series_name:
+            return ""
+        # Normalize to ASCII
+        s = unidecode(series_name)
+        # Replace common punctuation and problematic characters with spaces or remove them
+        s = re.sub(r'[\/:"*?<>|]+', ' ', s) # Characters to replace with space
+        s = re.sub(r"['\.]+", '', s)          # Characters to remove
+        # Replace multiple spaces with a single space
+        s = re.sub(r'\s+', ' ', s).strip()
+        # Truncate to a reasonable length, e.g., 50 characters
+        return s[:50]
 
     @staticmethod
     def title_to_fsname(title: str) -> str:
