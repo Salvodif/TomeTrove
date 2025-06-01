@@ -247,19 +247,29 @@ class BookManager:
 
     def get_book_path(self, book: Book) -> str:
         """Returns the full path of the book file."""
-        if not book.filename:
-            raise ValueError("Book has no associated filename")
+        logger = logging.getLogger(__name__) # Ensure logger is available
+        if not book.filename or not book.filename.strip():
+            logger.warning(f"Book '{book.title}' (UUID: {book.uuid}) has no filename; cannot determine path.")
+            raise ValueError("Book has no associated filename to construct a path.")
 
-        author_fs = FormValidators.author_to_fsname(book.author)
-
-        if book.series and book.series.strip():
-            series_fs = FormValidators.series_to_fsname(book.series)
-            # Combine author and series for the directory name
-            series_author_directory = f"{author_fs} - {series_fs}"
-            return str(Path(self.library_root) / series_author_directory / book.filename)
+        directory_name_fs = ""
+        # Check if it's a series book (series name exists and num_series is present)
+        if book.series and book.series.strip() and book.num_series is not None:
+            directory_name_fs = FormValidators.series_to_fsname(book.series)
+            if not directory_name_fs:
+                logger.error(f"Failed to generate series directory for book '{book.title}' (UUID: {book.uuid}) with series '{book.series}'. Defaulting to author directory.")
+                directory_name_fs = FormValidators.author_to_fsname(book.author)
+                if not directory_name_fs:
+                     logger.error(f"Author name also problematic for book '{book.title}' (UUID: {book.uuid}). Using '.' as directory.")
+                     directory_name_fs = "."
         else:
-            # Original behavior: only author directory
-            return str(Path(self.library_root) / author_fs / book.filename)
+            # Not a series book, or series information is incomplete
+            directory_name_fs = FormValidators.author_to_fsname(book.author)
+            if not directory_name_fs:
+                logger.error(f"Failed to generate author directory for book '{book.title}' (UUID: {book.uuid}). Using '.' as directory.")
+                directory_name_fs = "."
+
+        return str(Path(self.library_root) / directory_name_fs / book.filename)
 
     def ensure_directory(self, author: str) -> str:
         """Creates the author's directory if it doesn't exist."""
@@ -357,126 +367,156 @@ class BookManager:
         # After updating, check if title, author, series, or num_series changed to rename file/path
         new_title = new_data.get('title', old_book_obj.title)
         new_author = new_data.get('author', old_book_obj.author)
-        new_series = new_data.get('series', old_book_obj.series)
-        # Handle new_num_series carefully, it might be missing or be a string from form
-        new_num_series_val = new_data.get('num_series', old_book_obj.num_series)
-        if isinstance(new_num_series_val, str):
-            try:
-                new_num_series = float(new_num_series_val) if new_num_series_val else None
-            except ValueError:
-                logger.warning(f"Could not parse num_series string '{new_num_series_val}' to float. Setting to None.")
+        new_series = new_data.get('series', old_book_obj.series) # May be None or empty string
+        new_num_series_val = new_data.get('num_series', old_book_obj.num_series) # May be None
+
+        new_num_series = None
+        if new_num_series_val is not None:
+            if isinstance(new_num_series_val, str):
+                try:
+                    new_num_series = float(new_num_series_val) if new_num_series_val.strip() else None
+                except ValueError:
+                    logger.warning(f"Could not parse num_series string '{new_num_series_val}' to float for book {uuid}. Treating as None.")
+                    new_num_series = None # Explicitly None if parsing fails
+            elif isinstance(new_num_series_val, (int, float)):
+                new_num_series = float(new_num_series_val)
+            else:
+                logger.warning(f"Invalid type for num_series '{new_num_series_val}' for book {uuid}. Treating as None.")
                 new_num_series = None
-        else:
-            new_num_series = new_num_series_val
 
 
         title_changed = new_title != old_book_obj.title
         author_changed = new_author != old_book_obj.author
-        series_changed = new_series != old_book_obj.series
-        num_series_changed = new_num_series != old_book_obj.num_series
+        series_changed = (new_series or "").strip() != (old_book_obj.series or "").strip() # Compare stripped series
+
+        old_num_series_float = None
+        if old_book_obj.num_series is not None:
+            try: old_num_series_float = float(old_book_obj.num_series)
+            except: pass
+
+        num_series_changed = new_num_series != old_num_series_float
 
         metadata_changed_for_path = title_changed or author_changed or series_changed or num_series_changed
+        logger.debug(f"Book {uuid}: title_changed={title_changed}, author_changed={author_changed}, series_changed={series_changed}, num_series_changed={num_series_changed}")
 
-        if metadata_changed_for_path and old_book_obj.filename:
-            logger.info(f"BookManager.update_book - Metadata changed for book {uuid}. Recalculating path and filename.")
 
-            # 1. Determine actual_old_file_path based on old_book_obj's current state
-            old_author_fs = FormValidators.author_to_fsname(old_book_obj.author)
-            old_parent_dir_name_parts = [old_author_fs]
-            if old_book_obj.series and old_book_obj.series.strip():
-                old_series_fs = FormValidators.series_to_fsname(old_book_obj.series)
-                old_parent_dir_name_parts.append(old_series_fs)
+        if metadata_changed_for_path:
+            logger.info(f"BookManager.update_book - Metadata changed for book {uuid}. Evaluating path and filename.")
 
-            old_parent_dir_name = " - ".join(old_parent_dir_name_parts)
-            actual_old_file_path = str(Path(self.library_root) / old_parent_dir_name / old_book_obj.filename)
-            logger.debug(f"BookManager.update_book - Calculated actual old file path: {actual_old_file_path}")
+            actual_old_file_path = None
+            old_filename_from_db = old_book_obj.filename
 
-            # 2. Determine new_filename
-            file_extension = Path(old_book_obj.filename).suffix
-            new_title_fs = FormValidators.title_to_fsname(new_title)
+            if old_filename_from_db and old_filename_from_db.strip():
+                # Candidate 1: Old Author directory (Non-series path)
+                old_author_fs_c1 = FormValidators.author_to_fsname(old_book_obj.author)
+                path_c1 = Path(self.library_root) / old_author_fs_c1 / old_filename_from_db
+                if path_c1.exists():
+                    actual_old_file_path = str(path_c1)
+                    logger.debug(f"Found old file at author path: {actual_old_file_path}")
 
-            if new_series and new_series.strip() and new_num_series is not None:
-                try:
-                    new_filename_stem = f"{int(new_num_series):02d} - {new_title_fs}"
-                except (ValueError, TypeError):
-                    logger.warning(f"Invalid new_num_series value ({new_num_series}) for filename formatting. Falling back to title only.")
-                    new_filename_stem = new_title_fs
+                # Candidate 2: Incorrect previous series path (Author - Series)
+                if not actual_old_file_path and old_book_obj.series and old_book_obj.series.strip():
+                    old_author_fs_c2 = FormValidators.author_to_fsname(old_book_obj.author)
+                    old_series_fs_c2 = FormValidators.series_to_fsname(old_book_obj.series)
+                    old_incorrect_series_dir = f"{old_author_fs_c2} - {old_series_fs_c2}"
+                    path_c2 = Path(self.library_root) / old_incorrect_series_dir / old_filename_from_db
+                    if path_c2.exists():
+                        actual_old_file_path = str(path_c2)
+                        logger.debug(f"Found old file at 'Author - Series' path: {actual_old_file_path}")
+
+                # Candidate 3: Current series path (SeriesName/) - in case only filename changes
+                if not actual_old_file_path and old_book_obj.series and old_book_obj.series.strip() and old_book_obj.num_series is not None:
+                    old_series_fs_c3 = FormValidators.series_to_fsname(old_book_obj.series)
+                    path_c3 = Path(self.library_root) / old_series_fs_c3 / old_filename_from_db
+                    if path_c3.exists():
+                        actual_old_file_path = str(path_c3)
+                        logger.debug(f"Found old file at new series path type: {actual_old_file_path}")
+
+
+                if not actual_old_file_path:
+                    logger.warning(f"Old file '{old_filename_from_db}' for book {uuid} not found at any expected legacy locations.")
+
+            # Generate new filename
+            file_extension = ""
+            if old_filename_from_db and old_filename_from_db.strip():
+                file_extension = Path(old_filename_from_db).suffix
+            elif 'file_extension' in new_data and new_data['file_extension'].startswith('.'):
+                file_extension = new_data['file_extension']
             else:
-                new_filename_stem = new_title_fs
-            new_filename = f"{new_filename_stem}{file_extension}"
-            logger.debug(f"BookManager.update_book - New filename generated: {new_filename}")
+                file_extension = '.epub' # Default if no old filename and no specific new extension
+                logger.debug(f"Defaulting to file extension '{file_extension}' for book {uuid}")
 
-            # 3. Determine new_parent_dir_path
             new_author_fs = FormValidators.author_to_fsname(new_author)
-            new_parent_dir_name_parts = [new_author_fs]
-            if new_series and new_series.strip():
-                new_series_fs = FormValidators.series_to_fsname(new_series)
-                new_parent_dir_name_parts.append(new_series_fs)
-
-            new_parent_dir_name = " - ".join(new_parent_dir_name_parts)
-            new_parent_dir_path_obj = Path(self.library_root) / new_parent_dir_name
-
-            # 4. Ensure new directory exists
-            logger.debug(f"BookManager.update_book - Ensuring new directory exists: {new_parent_dir_path_obj}")
-            FileSystemHandler.ensure_directory_exists(str(new_parent_dir_path_obj))
-
-            new_file_path = str(new_parent_dir_path_obj / new_filename)
-            logger.debug(f"BookManager.update_book - New file path calculated: {new_file_path}")
-
-            try:
-                if Path(actual_old_file_path).exists():
-                    if actual_old_file_path != new_file_path:
-                        FileSystemHandler.rename_file(actual_old_file_path, new_file_path)
-                        logger.info(f"BookManager.update_book - File moved/renamed from {actual_old_file_path} to {new_file_path}")
-                    else:
-                        logger.info(f"BookManager.update_book - File path and name ({new_file_path}) remain unchanged. No rename/move needed.")
-
-                    # Always update filename in DB if it changed, even if path didn't, or if path did.
-                    if old_book_obj.filename != new_filename:
-                        self.books_table.update({'filename': new_filename}, q.uuid == uuid)
-                        logger.debug(f"BookManager.update_book - Database updated with new filename: {new_filename} for book {uuid}")
-                    else:
-                        logger.debug(f"BookManager.update_book - Filename in DB ({new_filename}) remains unchanged.")
-
-                else:
-                    logger.warning(f"BookManager.update_book - Old file path {actual_old_file_path} does not exist. Skipping rename/move.")
-                    # Update filename in DB if it's different, as the record should reflect the new naming convention.
-                    if old_book_obj.filename != new_filename:
-                        self.books_table.update({'filename': new_filename}, q.uuid == uuid)
-                        logger.info(f"BookManager.update_book - Database updated with new filename: {new_filename} for book {uuid} (old file did not exist).")
-
-            except RuntimeError as e:
-                logger.error(f"BookManager.update_book - Error during file operation or DB update for book {uuid}: {e}")
-            except Exception as e:
-                logger.error(f"BookManager.update_book - Unexpected error during file/path update for book {uuid}: {e}")
-
-        elif metadata_changed_for_path and not old_book_obj.filename:
-            # Case: Metadata changed, but there was no old filename.
-            # Generate the new filename based on new metadata and save it to the DB.
-            logger.info(f"BookManager.update_book - Metadata changed for book {uuid}, but no old filename was set. Generating and setting new filename.")
-
-            file_extension = new_data.get('file_extension', '.epub') # Default or get from new_data
-            if not isinstance(file_extension, str) or not file_extension.startswith('.'):
-                logger.warning(f"BookManager.update_book - Invalid or missing file_extension, defaulting to .epub for book {uuid}")
-                file_extension = '.epub'
-
             new_title_fs = FormValidators.title_to_fsname(new_title)
-            if new_series and new_series.strip() and new_num_series is not None:
+            new_filename_stem = ""
+
+            is_new_series_book = new_series and new_series.strip() and new_num_series is not None
+
+            if is_new_series_book:
                 try:
-                    new_filename_stem = f"{int(new_num_series):02d} - {new_title_fs}"
-                except (ValueError, TypeError):
-                    logger.warning(f"Invalid new_num_series value ({new_num_series}) for filename formatting. Falling back to title only.")
-                    new_filename_stem = new_title_fs
-            else:
-                new_filename_stem = new_title_fs
+                    new_filename_stem = f"{int(new_num_series):02d} - {new_author_fs} - {new_title_fs}"
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid num_series '{new_num_series}' for book {uuid} filename formatting: {e}. Falling back.")
+                    # Fallback for series book filename if num_series is problematic
+                    new_filename_stem = f"{new_author_fs} - {new_title_fs}"
+            else: # Not a series book
+                # NON-SERIES book: Filename should be "Author - Title"
+                new_filename_stem = f"{new_author_fs} - {new_title_fs}" # CORRECTED LOGIC FOR NON-SERIES
 
             new_filename = f"{new_filename_stem}{file_extension}"
-            logger.debug(f"BookManager.update_book - New filename for book without previous file: {new_filename}")
+            logger.debug(f"Generated new filename for book {uuid}: {new_filename}")
 
-            self.books_table.update({'filename': new_filename}, q.uuid == uuid)
-            logger.info(f"BookManager.update_book - Database updated with new filename: {new_filename} for book {uuid} (no old file).")
-            # No actual file to rename, but the metadata should reflect the new naming convention.
-            # The actual file can be uploaded/associated later.
+            # Generate new parent directory path
+            new_parent_dir_path_obj = None
+            if is_new_series_book:
+                new_series_fs = FormValidators.series_to_fsname(new_series)
+                if not new_series_fs: # Should not happen if series name is valid
+                    logger.error(f"Problem generating series dir name for '{new_series}'. Using author dir for book {uuid}.")
+                    new_parent_dir_path_obj = Path(self.library_root) / new_author_fs
+                else:
+                    new_parent_dir_path_obj = Path(self.library_root) / new_series_fs
+            else: # Non-series book
+                new_parent_dir_path_obj = Path(self.library_root) / new_author_fs
+
+            if not new_parent_dir_path_obj: # Ultimate fallback, should be extremely rare
+                 logger.error(f"Could not determine parent directory for book {uuid}. Defaulting to library root.")
+                 new_parent_dir_path_obj = Path(self.library_root)
+
+
+            logger.debug(f"Ensuring new directory exists: {new_parent_dir_path_obj}")
+            FileSystemHandler.ensure_directory_exists(str(new_parent_dir_path_obj))
+            new_file_path = str(new_parent_dir_path_obj / new_filename)
+            logger.debug(f"New full file path for book {uuid}: {new_file_path}")
+
+            if actual_old_file_path:
+                if actual_old_file_path != new_file_path:
+                    try:
+                        FileSystemHandler.rename_file(actual_old_file_path, new_file_path)
+                        logger.info(f"File for book {uuid} MOVED from {actual_old_file_path} to {new_file_path}")
+                    except Exception as e:
+                        logger.error(f"Error moving file for book {uuid} from {actual_old_file_path} to {new_file_path}: {e}")
+                else:
+                    logger.info(f"File for book {uuid} is already at the correct path and name: {new_file_path}. No move needed.")
+
+            # Update filename in DB if it has changed or if it was empty and is now set
+            if old_filename_from_db != new_filename or (not old_filename_from_db and new_filename):
+                self.books_table.update({'filename': new_filename}, q.uuid == uuid)
+                logger.info(f"Filename for book {uuid} updated in DB to: {new_filename}")
+            else:
+                logger.debug(f"Filename for book {uuid} ('{new_filename}') unchanged in DB.")
+
+        else: # No metadata changed that affects path, but check if filename was passed in new_data
+            if 'filename' in new_data and new_data['filename'] != old_book_obj.filename:
+                 # This case is if filename is directly edited by user, not via metadata change.
+                 # The current self.get_book_path(old_book_obj) would use the *old* metadata for directory.
+                 # This specific scenario might need more thought if direct filename edits are allowed
+                 # and should also trigger directory re-evaluation based on *current* metadata.
+                 # For now, we assume filename changes are driven by metadata changes above.
+                 logger.info(f"Book {uuid}: Metadata affecting path did not change, but 'filename' might have been in new_data. Current logic prioritizes metadata-driven filename/path.")
+                 # If only the filename string changed in new_data, but not the components (author, title, series),
+                 # the DB has already been updated. We might need to ensure consistency if this happens.
+                 # For now, this path is less critical as changes are expected via metadata.
+
 #################################################################
 
 ################### REMOVE BOOK ###########################

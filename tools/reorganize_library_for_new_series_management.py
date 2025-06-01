@@ -121,131 +121,159 @@ def reorganize():
     logger.info(f"Found {len(all_books)} books to process.")
 
     processed_series_books = 0
+    processed_nonseries_books = 0 # New counter
     files_moved_or_renamed = 0
     db_filenames_updated = 0
-    skipped_due_to_missing_num_series = 0
-    skipped_due_to_invalid_num_series = 0
+    skipped_due_to_missing_num_series = 0 # Specific to series books attempt
+    skipped_due_to_invalid_num_series = 0 # Specific to series books attempt
     files_not_found = 0
+    skipped_path_op_due_to_invalid_dir = 0 # New counter
 
     for book in all_books:
-        if not (book.series and book.series.strip()):
-            continue # Skip non-series books
-
-        processed_series_books += 1
-        logger.info(f"Processing series book: [bold magenta]'{book.title}'[/bold magenta] by '{book.author}' (Series: {book.series}, UUID: {book.uuid})")
-
         original_db_filename = book.filename
-        if not original_db_filename:
-            logger.warning(f":warning: Book [bold]'{book.title}'[/bold] (UUID: {book.uuid}) has no filename in DB. Skipping file operations, may update DB filename if possible.")
-            # We might still generate a new_filename_only and update DB if other info is present
-
-        # --- Old Path Construction ---
-        old_author_fs = FormValidators.author_to_fsname(book.author)
-
-        # Candidate 1: Author/filename.ext
-        old_path_candidate1_parent = Path(book_manager.library_root) / old_author_fs
-        old_file_path_candidate1 = old_path_candidate1_parent / original_db_filename if original_db_filename else None
-
-        # Candidate 2: Author - Series/filename.ext (current series name, original filename)
-        # This helps if the directory is correct but filename isn't, or if script is re-run
-        current_series_fs = FormValidators.series_to_fsname(book.series)
-        old_path_candidate2_parent_dir_name = f"{old_author_fs} - {current_series_fs}"
-        old_path_candidate2_parent = Path(book_manager.library_root) / old_path_candidate2_parent_dir_name
-        old_file_path_candidate2 = old_path_candidate2_parent / original_db_filename if original_db_filename else None
-
-        actual_old_file_path = None
-        if original_db_filename: # Only look for files if a filename exists in DB
-            if old_file_path_candidate1 and old_file_path_candidate1.exists():
-                actual_old_file_path = old_file_path_candidate1
-                logger.info(f"Found file at primary old path: {actual_old_file_path}")
-            elif old_file_path_candidate2 and old_file_path_candidate2.exists():
-                actual_old_file_path = old_file_path_candidate2
-                logger.info(f"Found file at secondary (series) old path: {actual_old_file_path}")
-            else:
-                logger.warning(f":warning: File for [bold]'{book.title}'[/bold] not found at expected old paths: {old_file_path_candidate1} or {old_file_path_candidate2}. Original: {original_db_filename}. Skipping file move.")
-                files_not_found +=1
-        else:
-            logger.info(f"Book [bold]'{book.title}'[/bold] has no original filename in DB; cannot search for an existing file.")
-
-
-        # --- New Filename Generation ---
-        new_filename_only = original_db_filename # Default to original, change if possible
+        author_fs = FormValidators.author_to_fsname(book.author)
         title_fs = FormValidators.title_to_fsname(book.title)
 
-        # Determine file extension
-        file_extension = ""
-        if original_db_filename:
-            file_extension = Path(original_db_filename).suffix
-
-        if not file_extension and book.other_formats:
-            # Try to get extension from the first entry in other_formats
-            if book.other_formats[0]:
-                file_extension = Path(book.other_formats[0]).suffix
-                logger.info(f"Used extension '{file_extension}' from other_formats for [bold]'{book.title}'[/bold].")
-
+        # Determine file extension robustly
+        file_extension = Path(original_db_filename).suffix if original_db_filename and original_db_filename.strip() else ""
+        if not file_extension and book.other_formats and len(book.other_formats) > 0 and book.other_formats[0]:
+            file_extension = Path(book.other_formats[0]).suffix
+            logger.info(f"Used extension '{file_extension}' from other_formats for [bold]'{book.title}'[/bold].")
         if not file_extension:
-            logger.warning(f":warning: Book [bold]'{book.title}'[/bold] has no detectable file extension. Defaulting to '.pdf'.")
-            file_extension = '.pdf' # Default extension
+            logger.info(f"Book [bold]'{book.title}'[/bold] has no detectable file extension. Defaulting to '.pdf' for new filename construction.")
+            file_extension = '.pdf'
 
-        if book.num_series is None:
-            logger.warning(f":warning: Book [bold]'{book.title}'[/bold] in series '{book.series}' (UUID: {book.uuid}) has no num_series. Filename will not include series number.")
-            skipped_due_to_missing_num_series += 1
-            new_filename_only = f"{title_fs}{file_extension}" # Filename without series number
-        else:
-            try:
-                # Ensure num_series is treated as float first if it could be like "1.0"
-                series_num_str = f"{int(float(book.num_series)):02d}"
-                new_filename_only = f"{series_num_str} - {title_fs}{file_extension}"
-            except (ValueError, TypeError):
-                logger.warning(f":warning: Book [bold]'{book.title}'[/bold] (UUID: {book.uuid}) has invalid num_series [red]'{book.num_series}'[/red]. Filename will not include series number.")
-                skipped_due_to_invalid_num_series += 1
-                new_filename_only = f"{title_fs}{file_extension}" # Filename without series number
+        is_series_book_for_path_and_filename = bool(book.series and book.series.strip() and book.num_series is not None)
 
+        current_file_to_move = None # Path object or None
+        new_parent_dir_path = None  # Path object
+        target_db_filename = ""     # String
+        final_destination_path = None # Path object
 
-        # --- New Directory and Path Construction ---
-        author_fs = FormValidators.author_to_fsname(book.author) # Re-get in case of changes, though unlikely here
-        series_fs = FormValidators.series_to_fsname(book.series)
-        new_parent_dir_name = f"{author_fs} - {series_fs}"
-        new_parent_dir_path = Path(book_manager.library_root) / new_parent_dir_name
-        new_full_file_path = new_parent_dir_path / new_filename_only
+        if is_series_book_for_path_and_filename:
+            processed_series_books += 1
+            logger.info(f"Processing SERIES book: [bold magenta]'{book.title}'[/bold magenta] by '{author_fs}' (Series: {book.series})")
 
-        # --- File Operations ---
-        if actual_old_file_path: # If an existing file was found
-            if actual_old_file_path.resolve() != new_full_file_path.resolve():
+            series_fs = FormValidators.series_to_fsname(book.series)
+            if not series_fs:
+                logger.error(f":x: Cannot determine series directory for '{book.title}' (Series: '{book.series}'). Skipping path operations for this book.")
+                skipped_path_op_due_to_invalid_dir += 1
+                # Attempt to update filename if it's different, assuming it stays in author folder as a fallback
+                # This part is tricky: if series dir is invalid, where should it go? For now, skip path ops.
+                # Filename generation for series books (even if dir is problematic)
                 try:
-                    logger.info(f"Ensuring directory exists: {new_parent_dir_path}")
-                    fs_handler.ensure_directory_exists(str(new_parent_dir_path))
-                    logger.info(f"Attempting to move '{actual_old_file_path}' to '{new_full_file_path}'")
-                    fs_handler.rename_file(str(actual_old_file_path), str(new_full_file_path))
-                    logger.info(f":white_check_mark: [green]MOVED:[/] '{actual_old_file_path}' [bold]to[/] '{new_full_file_path}'")
-                    files_moved_or_renamed +=1
-                except Exception as e:
-                    logger.error(f":x: [bold red]Error moving file for '{book.title}' (UUID: {book.uuid}):[/] {e}")
+                    series_num_str = f"{int(float(book.num_series)):02d}"
+                    target_db_filename = f"{series_num_str} - {author_fs} - {title_fs}{file_extension}"
+                except (ValueError, TypeError):
+                    target_db_filename = f"{author_fs} - {title_fs}{file_extension}" # Fallback
+                    skipped_due_to_invalid_num_series +=1
+                # DB update logic is common at the end, so it will be handled if target_db_filename is set
             else:
-                logger.info(f"File [bold]'{book.title}'[/bold] (UUID: {book.uuid}) is already in the correct location and correctly named: {new_full_file_path}")
-        elif original_db_filename: # File not found, but had a filename in DB
-             logger.info(f"File for [bold]'{book.title}'[/bold] (UUID: {book.uuid}) was not found. If its DB filename needs updating, that will be handled next.")
-        # If no original_db_filename and no actual_old_file_path, nothing to move.
+                new_parent_dir_path = Path(book_manager.library_root) / series_fs
+                try:
+                    series_num_str = f"{int(float(book.num_series)):02d}"
+                    target_db_filename = f"{series_num_str} - {author_fs} - {title_fs}{file_extension}"
+                except (ValueError, TypeError):
+                    logger.warning(f":warning: Series book [bold]'{book.title}'[/bold] has invalid num_series [red]'{book.num_series}'[/red]. Filename: {author_fs} - {title_fs}{file_extension}")
+                    target_db_filename = f"{author_fs} - {title_fs}{file_extension}"
+                    skipped_due_to_invalid_num_series += 1
+                final_destination_path = new_parent_dir_path / target_db_filename
 
-        # --- Database Update for filename ---
-        # Update if new filename is different from what's in DB, OR if DB filename was empty and we generated one.
-        if original_db_filename != new_filename_only or (not original_db_filename and new_filename_only):
-            try:
-                book_manager.books_table.update({'filename': new_filename_only}, Query().uuid == book.uuid)
-                logger.info(f":floppy_disk: [blue]DB_UPDATE:[/] Filename for '{book.title}' to '{new_filename_only}' (UUID: {book.uuid})")
-                db_filenames_updated +=1
-            except Exception as e:
-                logger.error(f":x: [bold red]Error updating DB for filename of '{book.title}' (UUID: {book.uuid}):[/] {e}")
-        else:
-            logger.info(f"Filename for [bold]'{book.title}'[/bold] (UUID: {book.uuid}) in DB is already correct ('{new_filename_only}'). No DB update needed.")
+            # Old File Location Detection for Series
+            if original_db_filename and original_db_filename.strip():
+                path_s_c1 = Path(book_manager.library_root) / author_fs / original_db_filename
+                path_s_c2_dir_name = f"{author_fs} - {series_fs}" # Use current series_fs for this check
+                path_s_c2 = Path(book_manager.library_root) / path_s_c2_dir_name / original_db_filename
+                path_s_c3 = Path(book_manager.library_root) / series_fs / original_db_filename # Target series dir
+
+                if path_s_c1.exists(): current_file_to_move = path_s_c1
+                elif path_s_c2.exists(): current_file_to_move = path_s_c2
+                elif path_s_c3.exists(): current_file_to_move = path_s_c3
+
+                if current_file_to_move: logger.info(f"Found series file at: {current_file_to_move}")
+                else:
+                    logger.warning(f":warning: File [yellow]'{original_db_filename}'[/yellow] for series book [bold]'{book.title}'[/bold] not found.")
+                    files_not_found += 1
+            else:
+                logger.info(f"Series book [bold]'{book.title}'[/bold] has no filename in DB. Cannot search.")
+
+        else: # NON-SERIES BOOK LOGIC
+            processed_nonseries_books += 1
+            logger.info(f"Processing NON-SERIES book: [bold cyan]'{book.title}'[/bold cyan] by '{author_fs}'")
+
+            if not author_fs:
+                logger.error(f":x: Cannot determine author directory for non-series book '{book.title}'. Skipping path operations.")
+                skipped_path_op_due_to_invalid_dir += 1
+                target_db_filename = f"UNKNOWN_AUTHOR - {title_fs}{file_extension}" # Best guess for filename
+            else:
+                new_parent_dir_path = Path(book_manager.library_root) / author_fs
+                target_db_filename = f"{author_fs} - {title_fs}{file_extension}"
+                final_destination_path = new_parent_dir_path / target_db_filename
+
+            # Old File Location Detection for Non-Series
+            if original_db_filename and original_db_filename.strip():
+                # Path NS1: Author_fs / original_db_filename
+                path_ns_c1 = Path(book_manager.library_root) / author_fs / original_db_filename
+                if path_ns_c1.exists():
+                    current_file_to_move = path_ns_c1
+                    logger.info(f"Found non-series file at: {current_file_to_move}")
+                else:
+                    # Path NS2: (Mistakenly in Author-Series folder?) - Less likely for non-series but possible if series info was removed
+                    if book.series and book.series.strip(): # Check if it HAD series info
+                        old_series_fs_ns = FormValidators.series_to_fsname(book.series)
+                        path_ns_c2_dir = Path(book_manager.library_root) / f"{author_fs} - {old_series_fs_ns}"
+                        path_ns_c2 = path_ns_c2_dir / original_db_filename
+                        if path_ns_c2.exists():
+                            current_file_to_move = path_ns_c2
+                            logger.info(f"Found non-series file (was series?) at 'Author - Series' path: {current_file_to_move}")
+                        else:
+                           logger.warning(f":warning: File [yellow]'{original_db_filename}'[/yellow] for non-series book [bold]'{book.title}'[/bold] not found.")
+                           files_not_found += 1
+                    else:
+                        logger.warning(f":warning: File [yellow]'{original_db_filename}'[/yellow] for non-series book [bold]'{book.title}'[/bold] not found in Author directory.")
+                        files_not_found += 1
+            else:
+                logger.info(f"Non-series book [bold]'{book.title}'[/bold] has no filename in DB. Cannot search.")
+
+        # --- COMMON FILE OPERATIONS & DB UPDATE (after if/else block) ---
+        if new_parent_dir_path and final_destination_path: # Ensure target paths were determined
+            if current_file_to_move: # If an old physical file was found
+                if current_file_to_move.resolve() != final_destination_path.resolve():
+                    try:
+                        fs_handler.ensure_directory_exists(str(new_parent_dir_path))
+                        fs_handler.rename_file(str(current_file_to_move), str(final_destination_path))
+                        logger.info(f":white_check_mark: [green]MOVED/RENAMED:[/] '{current_file_to_move}' [bold]to[/] '{final_destination_path}'")
+                        files_moved_or_renamed += 1
+                    except Exception as e:
+                        logger.error(f":x: [bold red]Error moving/renaming file for '{book.title}':[/] {e}")
+                else:
+                    logger.info(f"File for [bold]'{book.title}'[/bold] already at correct path and name: {final_destination_path}")
+        elif current_file_to_move: # Old file found, but target path invalid (e.g. bad series/author name for dir)
+             logger.warning(f"Old file {current_file_to_move} found for book '{book.title}', but target directory was invalid. File not moved.")
+
+
+        if target_db_filename: # Ensure a target filename was determined
+            if original_db_filename != target_db_filename or (not original_db_filename and target_db_filename):
+                try:
+                    book_manager.books_table.update({'filename': target_db_filename}, Query().uuid == book.uuid)
+                    logger.info(f":floppy_disk: [blue]DB_UPDATE:[/] Filename for '{book.title}' to '{target_db_filename}' (UUID: {book.uuid})")
+                    db_filenames_updated += 1
+                except Exception as e:
+                    logger.error(f":x: [bold red]Error updating DB for filename of '{book.title}' (UUID: {book.uuid}):[/] {e}")
+            else: # Filename in DB is already correct
+                # Log only if file was also correctly placed or if no move was needed.
+                if (current_file_to_move and final_destination_path and current_file_to_move.resolve() == final_destination_path.resolve()) or not current_file_to_move :
+                     logger.info(f"Filename for [bold]'{book.title}'[/bold] (UUID: {book.uuid}) in DB is already correct ('{target_db_filename}').")
 
     console.print("\n[bold cyan]--- Reorganization Summary ---[/bold cyan]")
     console.print(f"Total books scanned: [bold]{len(all_books)}[/bold]")
     console.print(f"Series books processed: [bold]{processed_series_books}[/bold]")
+    console.print(f"Non-series books processed: [bold]{processed_nonseries_books}[/bold]") # New summary line
     console.print(f"Files moved/renamed: [bold green]{files_moved_or_renamed}[/bold green]")
     console.print(f"DB filenames updated: [bold blue]{db_filenames_updated}[/bold blue]")
-    console.print(f"Books skipped (missing num_series): [yellow]{skipped_due_to_missing_num_series}[/yellow]")
-    console.print(f"Books skipped (invalid num_series): [yellow]{skipped_due_to_invalid_num_series}[/yellow]")
+    console.print(f"Series books skipped (missing num_series for filename prefix): [yellow]{skipped_due_to_missing_num_series}[/yellow]")
+    console.print(f"Series books skipped (invalid num_series for filename prefix): [yellow]{skipped_due_to_invalid_num_series}[/yellow]")
+    console.print(f"Books skipped (path op due to invalid dir name): [magenta]{skipped_path_op_due_to_invalid_dir}[/magenta]") # New summary line
     console.print(f"Original files not found: [red]{files_not_found}[/red]")
     console.print("[bold cyan]Reorganization script finished.[/bold cyan]")
 
