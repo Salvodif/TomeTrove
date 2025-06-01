@@ -4,9 +4,16 @@ from textual.app import ComposeResult
 from textual.widgets import Input, Button, TextArea, DirectoryTree, Label, Checkbox
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from datetime import datetime
+from textual.message import Message # Added import
 
 from textual_autocomplete import AutoComplete, DropdownItem, TargetState
 
+
+class SeriesSelectedInternalMessage(Message):
+    def __init__(self, series_name: str, autocomplete_control: AutoComplete) -> None:
+        super().__init__()
+        self.series_name = series_name
+        self.autocomplete_control = autocomplete_control
 
 class AuthorAutoComplete(AutoComplete):
     """An AutoComplete widget for author names."""
@@ -160,6 +167,30 @@ class SeriesAutoComplete(AutoComplete):
                 # 'main' is the text displayed in the dropdown.
                 matches.append(DropdownItem(main=series_name))
         return matches
+
+    def post_completion(self) -> None:
+        # It's crucial to get the value *before* calling super().post_completion()
+        # if super().post_completion() might clear the input or change focus in a way
+        # that makes self.target.value unreliable.
+        # However, the docs say post_completion is called *after* apply_completion,
+        # so the value should be stable in self.target.value.
+
+        selected_series_name = ""
+        # self.target is the Input widget instance in this application's setup
+        if isinstance(self.target, Input):
+            selected_series_name = self.target.value
+        # else:
+            # If self.target could be an ID string, we'd need to query the input:
+            # try:
+            #     input_widget = self.app.query_one(self.target, Input)
+            #     selected_series_name = input_widget.value
+            # except Exception:
+            #     pass # Or log error
+
+        super().post_completion() # Call parent's post_completion (usually hides dropdown)
+
+        if selected_series_name: # Only post if a name was actually retrieved
+            self.post_message(SeriesSelectedInternalMessage(selected_series_name, self))
 
 
 class BookForm:
