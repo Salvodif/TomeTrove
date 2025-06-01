@@ -33,3 +33,12 @@ class FileSystemHandler:
         path_obj = Path(path)
         path_obj.mkdir(parents=True, exist_ok=True)
         return str(path_obj.absolute())
+
+    @staticmethod
+    def rename_file(old_path: str, new_path: str) -> bool:
+        """Rinomina un file."""
+        try:
+            os.rename(old_path, new_path)
+            return True
+        except OSError as e:
+            raise RuntimeError(f"Impossibile rinominare il file da '{old_path}' a '{new_path}': {str(e)}")

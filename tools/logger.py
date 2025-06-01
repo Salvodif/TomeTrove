@@ -7,7 +7,7 @@ from configmanager import ConfigManager
 class AppLogger:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-        self.logger = logging.getLogger("BookManager")
+        self.logger = logging.getLogger("TomeTrove")
         self.start_time = datetime.now()  # Memorizza il momento dell'avvio
         self.setup_logging()
 
@@ -30,22 +30,16 @@ class AppLogger:
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         ))
         
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s'
-        ))
-        
         self.logger.setLevel(logging.DEBUG)
         self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
         
         # Logga l'avvio dell'applicazione
-        self.logger.info(f"Avvio applicazione - BookManager vX.Y.Z - {self.start_time}")
+        self.logger.info(f"Avvio applicazione - TomeTrove v1.2 - {self.start_time}")
 
     @staticmethod
     def get_logger(name: Optional[str] = None) -> logging.Logger:
         """Restituisce un logger configurato"""
-        return logging.getLogger(name or "BookManager")
+        return logging.getLogger(name or "TomeTrove")
 
     def log_exception(self, message: str, exc_info: Exception) -> None:
         """Registra un'eccezione con messaggio personalizzato"""

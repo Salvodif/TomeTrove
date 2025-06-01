@@ -1,3 +1,5 @@
 textual
 tinydb
-textual-autocomplete 
+textual-autocomplete # >= 0.4.0 for CompletionApplied event; current code uses AutoComplete.Selected for broader compatibility
+unidecode==1.4.0
+rich>=13.0.0

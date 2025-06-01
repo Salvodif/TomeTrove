@@ -8,6 +8,8 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.containers import Container # Removed Horizontal, Vertical as they are not directly used here
 from textual.widgets import Header, Footer, DataTable # Added DataTable for type hint clarity
+from datetime import datetime # Added for Book.added type, if it is datetime
+from typing import Optional, Callable # Ensure Optional and Callable are imported
 
 from tools.logger import AppLogger
 from configmanager import ConfigManager
@@ -24,6 +26,24 @@ from screens.confirmationscreen import ConfirmationScreen
 from screens.serieslist import SeriesListScreen # Import SeriesListScreen
 
 
+# Helper class for sorting datetime objects in descending order
+class DescendingDateTime:
+    def __init__(self, dt_value):
+        self.dt_value = dt_value
+
+    def __lt__(self, other):
+        if self.dt_value is None and other.dt_value is None:
+            return False  # Equal
+        if self.dt_value is None:
+            return False  # None is considered "larger" for descending, so it comes last
+        if other.dt_value is None:
+            return True   # Other is None, so self comes first
+        return self.dt_value > other.dt_value # Inverted comparison for descending
+
+    def __eq__(self, other):
+        return self.dt_value == other.dt_value
+
+
 class MainScreen(Screen):
     """Main application screen for displaying and managing books."""
     BINDINGS = [
@@ -36,7 +56,8 @@ class MainScreen(Screen):
         ("ctrl+s", "settings", "Settings"),
         ("ctrl+e", "delete_book_action", "Delete Book"),
         ("ctrl+p", "filter_by_series", "Filter Series"),
-        ("f6", "show_series_list", "Series List (F6)")
+        ("f6", "show_series_list", "Series List (F6)"),
+        ("ctrl+d", "open_book_directory", "Open Directory")
     ]
 
     def __init__(self, config_manager: ConfigManager, library_manager: LibraryManager):
@@ -50,6 +71,7 @@ class MainScreen(Screen):
         # Default sort order: newest first
         self.sort_reverse = True 
         self.sort_field = "added"
+        self.last_search_query: Optional[str] = None # Store the last search query
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -131,7 +153,13 @@ class MainScreen(Screen):
         if book_uuid:
             book_to_edit = self.library_manager.books.get_book(book_uuid)
             if book_to_edit:
-                self.app.push_screen(EditScreen(self.library_manager.books, book_to_edit))
+                self.app.push_screen(
+                    EditScreen(
+                        self.library_manager.books,
+                        book_to_edit,
+                        on_save_callback=self._handle_edit_completion
+                    )
+                )
             else:
                 self.notify(f"Book with UUID {book_uuid} not found.", severity="error", title="Error")
         else:
@@ -364,22 +392,59 @@ class MainScreen(Screen):
         def handle_search_query(query: str) -> None:
             """Callback for the search input dialog."""
             if query:
-                books = self.library_manager.books.search_books_by_text(query)
+                self.last_search_query = query # Store the query
+                books = self.library_manager.books.search_books_by_text(self.last_search_query)
                 if books:
+                    # Sort books according to the specified multi-level criteria
+                    books.sort(key=lambda b: (
+                        DescendingDateTime(b.added),
+                        (0 if b.series is None or b.series.strip() == '' else 1,
+                         b.series.strip().lower() if b.series and b.series.strip() else ''),
+                        (0 if b.num_series is None else 1,
+                         b.num_series if b.num_series is not None else float('-inf')),
+                        b.title.lower() if b.title else ''
+                    ))
                     self._display_books_in_table(books)
-                    self.notify(f"Found {len(books)} book(s) matching '{query}'.", title="Search Results")
+                    self.notify(f"Found {len(books)} book(s) matching '{self.last_search_query}'.", title="Search Results")
                 else:
                     self._display_books_in_table([])
-                    self.notify(f"No books found matching '{query}'.", title="Search Results")
+                    self.notify(f"No books found matching '{self.last_search_query}'.", title="Search Results")
             else:
-                self.action_reset_search()
+                self.action_reset_search() # This will clear self.last_search_query
         self.app.push_screen(
             InputScreen(title="Search Book", placeholder="Enter title or author...", callback=handle_search_query)
         )
 
+    def _handle_edit_completion(self, book: Book) -> None:
+        """Callback for when a book edit is completed and saved."""
+        if self.last_search_query:
+            self.logger.info(f"Book edit completed, re-running search for query: '{self.last_search_query}'")
+            books = self.library_manager.books.search_books_by_text(self.last_search_query)
+            if books:
+                # Re-apply the same sorting logic
+                books.sort(key=lambda b: (
+                    DescendingDateTime(b.added),
+                    (0 if b.series is None or b.series.strip() == '' else 1,
+                     b.series.strip().lower() if b.series and b.series.strip() else ''),
+                    (0 if b.num_series is None else 1,
+                     b.num_series if b.num_series is not None else float('-inf')),
+                    b.title.lower() if b.title else ''
+                ))
+                self._display_books_in_table(books)
+                # Notify about search refresh, could be more specific
+                self.notify(f"Search results refreshed for '{self.last_search_query}'.", title="Search Updated")
+            else:
+                self._display_books_in_table([])
+                self.notify(f"No books found matching '{self.last_search_query}' after edit.", title="Search Updated")
+        else:
+            self.logger.info("Book edit completed, reloading main table data.")
+            self.reload_table_data() # Reloads the full list if no search was active
+        # The EditScreen already shows a success notification for the save itself.
+
     def action_reset_search(self) -> None:
         """Handles the 'reset_search' action: clears search and reloads all books."""
         self.current_series_filter = None
+        self.last_search_query = None # Clear the last search query
         self.reload_table_data()
         self.notify("All filters reset. Displaying all books.", title="Filters Reset")
 
@@ -387,3 +452,48 @@ class MainScreen(Screen):
         """Handles the 'show_series_list' action: opens the SeriesListScreen."""
         self.logger.debug("MainScreen: action_show_series_list triggered.")
         self.app.push_screen(SeriesListScreen(self.library_manager))
+
+    async def action_open_book_directory(self) -> None:
+        """Handles the 'open_book_directory' action: opens the directory of the selected book."""
+        table = self.query_one("#books-table", DataTableBook)
+        book_uuid = table.current_uuid
+        if not book_uuid:
+            self.logger.warning("Attempt to open book directory without selection.")
+            self.notify("No book selected to open its directory.", severity="warning", title="Selection Missing")
+            return
+
+        book = self.library_manager.books.get_book(book_uuid)
+        if not book:
+            self.logger.error(f"Book with UUID {book_uuid} not found for opening directory.")
+            self.notify(f"Book not found.", severity="error", title="Error")
+            return
+
+        try:
+            book_path_str = self.library_manager.books.get_book_path(book)
+        except ValueError as e: # This typically means book.filename is None or author is invalid for path
+            self.logger.warning(f"Cannot determine path for book '{book.title}': {e}")
+            self.notify(f"Cannot determine book path: {e}", severity="warning", title="Directory Error")
+            return
+
+        if not book_path_str: # Should be caught by ValueError, but as a safeguard
+            self.logger.warning(f"Book path is empty for book '{book.title}'. Cannot open directory.")
+            self.notify("Book path is missing. Cannot open directory.", severity="warning", title="Directory Error")
+            return
+
+        try:
+            book_file_path = Path(book_path_str)
+            if not book_file_path.is_file(): # Check if the path is actually a file before getting parent
+                self.logger.warning(f"Book path '{book_path_str}' does not point to a valid file. Cannot open directory.")
+                self.notify("Book path is invalid. Cannot open directory.", severity="warning", title="Directory Error")
+                return
+
+            book_directory = str(book_file_path.parent)
+            self.logger.info(f"Attempting to open directory: {book_directory} for book '{book.title}'")
+            FileSystemHandler.open_file_with_default_app(book_directory)
+            self.notify(f"Attempting to open directory: {book_directory}", title="Open Directory")
+        except RuntimeError as e:
+            self.logger.error(f"Error opening directory '{book_directory}': {e}", exc_info=True)
+            self.notify(f"Could not open directory: {e}", severity="error", title="Open Error")
+        except Exception as e:
+            self.logger.error(f"Unexpected error opening directory for book '{book.title}': {e}", exc_info=True)
+            self.notify(f"An unexpected error occurred: {e}", severity="error", title="Error")

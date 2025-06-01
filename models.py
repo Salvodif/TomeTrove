@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 import logging
+from functools import cmp_to_key
 
 from formvalidators import FormValidators
 from filesystem import FileSystemHandler
@@ -246,11 +247,29 @@ class BookManager:
 
     def get_book_path(self, book: Book) -> str:
         """Returns the full path of the book file."""
-        if not book.filename:
-            raise ValueError("Book has no associated filename")
+        logger = logging.getLogger(__name__) # Ensure logger is available
+        if not book.filename or not book.filename.strip():
+            logger.warning(f"Book '{book.title}' (UUID: {book.uuid}) has no filename; cannot determine path.")
+            raise ValueError("Book has no associated filename to construct a path.")
 
-        author_dir = FormValidators.author_to_fsname(book.author)
-        return str(Path(self.library_root) / author_dir / book.filename)
+        directory_name_fs = ""
+        # Check if it's a series book (series name exists and num_series is present)
+        if book.series and book.series.strip() and book.num_series is not None:
+            directory_name_fs = FormValidators.series_to_fsname(book.series)
+            if not directory_name_fs:
+                logger.error(f"Failed to generate series directory for book '{book.title}' (UUID: {book.uuid}) with series '{book.series}'. Defaulting to author directory.")
+                directory_name_fs = FormValidators.author_to_fsname(book.author)
+                if not directory_name_fs:
+                     logger.error(f"Author name also problematic for book '{book.title}' (UUID: {book.uuid}). Using '.' as directory.")
+                     directory_name_fs = "."
+        else:
+            # Not a series book, or series information is incomplete
+            directory_name_fs = FormValidators.author_to_fsname(book.author)
+            if not directory_name_fs:
+                logger.error(f"Failed to generate author directory for book '{book.title}' (UUID: {book.uuid}). Using '.' as directory.")
+                directory_name_fs = "."
+
+        return str(Path(self.library_root) / directory_name_fs / book.filename)
 
     def ensure_directory(self, author: str) -> str:
         """Creates the author's directory if it doesn't exist."""
@@ -265,6 +284,21 @@ class BookManager:
         logger = logging.getLogger(__name__)
         logger.debug(f"BookManager.update_book - Attempting to update book with UUID: {uuid}. Incoming data: {new_data}")
         q = tinydb.Query()
+
+        # Get old book object before updating
+        old_book_obj = self.get_book(uuid) # Changed from get_book_by_uuid
+        if not old_book_obj:
+            logger.error(f"BookManager.update_book - Book with UUID {uuid} not found. Cannot update.")
+            raise ValueError(f"Book with UUID {uuid} not found.")
+
+        # old_book_data variable is removed as old_book_obj is now the Book instance
+        try:
+            old_file_path = self.get_book_path(old_book_obj)
+            logger.debug(f"BookManager.update_book - Old file path: {old_file_path}")
+        except ValueError as e:
+            # This can happen if the book has no filename, which is possible.
+            old_file_path = None
+            logger.warning(f"BookManager.update_book - Could not determine old file path for book {uuid}: {e}")
         
         # Process 'added' field
         if 'added' in new_data:
@@ -329,6 +363,160 @@ class BookManager:
         logger.debug(f"BookManager.update_book - Data before TinyDB update operation: {new_data}")
         self.books_table.update(new_data, q.uuid == uuid)
         self._dirty = True
+
+        # After updating, check if title, author, series, or num_series changed to rename file/path
+        new_title = new_data.get('title', old_book_obj.title)
+        new_author = new_data.get('author', old_book_obj.author)
+        new_series = new_data.get('series', old_book_obj.series) # May be None or empty string
+        new_num_series_val = new_data.get('num_series', old_book_obj.num_series) # May be None
+
+        new_num_series = None
+        if new_num_series_val is not None:
+            if isinstance(new_num_series_val, str):
+                try:
+                    new_num_series = float(new_num_series_val) if new_num_series_val.strip() else None
+                except ValueError:
+                    logger.warning(f"Could not parse num_series string '{new_num_series_val}' to float for book {uuid}. Treating as None.")
+                    new_num_series = None # Explicitly None if parsing fails
+            elif isinstance(new_num_series_val, (int, float)):
+                new_num_series = float(new_num_series_val)
+            else:
+                logger.warning(f"Invalid type for num_series '{new_num_series_val}' for book {uuid}. Treating as None.")
+                new_num_series = None
+
+
+        title_changed = new_title != old_book_obj.title
+        author_changed = new_author != old_book_obj.author
+        series_changed = (new_series or "").strip() != (old_book_obj.series or "").strip() # Compare stripped series
+
+        old_num_series_float = None
+        if old_book_obj.num_series is not None:
+            try: old_num_series_float = float(old_book_obj.num_series)
+            except: pass
+
+        num_series_changed = new_num_series != old_num_series_float
+
+        metadata_changed_for_path = title_changed or author_changed or series_changed or num_series_changed
+        logger.debug(f"Book {uuid}: title_changed={title_changed}, author_changed={author_changed}, series_changed={series_changed}, num_series_changed={num_series_changed}")
+
+
+        if metadata_changed_for_path:
+            logger.info(f"BookManager.update_book - Metadata changed for book {uuid}. Evaluating path and filename.")
+
+            actual_old_file_path = None
+            old_filename_from_db = old_book_obj.filename
+
+            if old_filename_from_db and old_filename_from_db.strip():
+                # Candidate 1: Old Author directory (Non-series path)
+                old_author_fs_c1 = FormValidators.author_to_fsname(old_book_obj.author)
+                path_c1 = Path(self.library_root) / old_author_fs_c1 / old_filename_from_db
+                if path_c1.exists():
+                    actual_old_file_path = str(path_c1)
+                    logger.debug(f"Found old file at author path: {actual_old_file_path}")
+
+                # Candidate 2: Incorrect previous series path (Author - Series)
+                if not actual_old_file_path and old_book_obj.series and old_book_obj.series.strip():
+                    old_author_fs_c2 = FormValidators.author_to_fsname(old_book_obj.author)
+                    old_series_fs_c2 = FormValidators.series_to_fsname(old_book_obj.series)
+                    old_incorrect_series_dir = f"{old_author_fs_c2} - {old_series_fs_c2}"
+                    path_c2 = Path(self.library_root) / old_incorrect_series_dir / old_filename_from_db
+                    if path_c2.exists():
+                        actual_old_file_path = str(path_c2)
+                        logger.debug(f"Found old file at 'Author - Series' path: {actual_old_file_path}")
+
+                # Candidate 3: Current series path (SeriesName/) - in case only filename changes
+                if not actual_old_file_path and old_book_obj.series and old_book_obj.series.strip() and old_book_obj.num_series is not None:
+                    old_series_fs_c3 = FormValidators.series_to_fsname(old_book_obj.series)
+                    path_c3 = Path(self.library_root) / old_series_fs_c3 / old_filename_from_db
+                    if path_c3.exists():
+                        actual_old_file_path = str(path_c3)
+                        logger.debug(f"Found old file at new series path type: {actual_old_file_path}")
+
+
+                if not actual_old_file_path:
+                    logger.warning(f"Old file '{old_filename_from_db}' for book {uuid} not found at any expected legacy locations.")
+
+            # Generate new filename
+            file_extension = ""
+            if old_filename_from_db and old_filename_from_db.strip():
+                file_extension = Path(old_filename_from_db).suffix
+            elif 'file_extension' in new_data and new_data['file_extension'].startswith('.'):
+                file_extension = new_data['file_extension']
+            else:
+                file_extension = '.epub' # Default if no old filename and no specific new extension
+                logger.debug(f"Defaulting to file extension '{file_extension}' for book {uuid}")
+
+            new_author_fs = FormValidators.author_to_fsname(new_author)
+            new_title_fs = FormValidators.title_to_fsname(new_title)
+            new_filename_stem = ""
+
+            is_new_series_book = new_series and new_series.strip() and new_num_series is not None
+
+            if is_new_series_book:
+                try:
+                    new_filename_stem = f"{int(new_num_series):02d} - {new_author_fs} - {new_title_fs}"
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid num_series '{new_num_series}' for book {uuid} filename formatting: {e}. Falling back.")
+                    # Fallback for series book filename if num_series is problematic
+                    new_filename_stem = f"{new_author_fs} - {new_title_fs}"
+            else: # Not a series book
+                # NON-SERIES book: Filename should be "Author - Title"
+                new_filename_stem = f"{new_author_fs} - {new_title_fs}" # CORRECTED LOGIC FOR NON-SERIES
+
+            new_filename = f"{new_filename_stem}{file_extension}"
+            logger.debug(f"Generated new filename for book {uuid}: {new_filename}")
+
+            # Generate new parent directory path
+            new_parent_dir_path_obj = None
+            if is_new_series_book:
+                new_series_fs = FormValidators.series_to_fsname(new_series)
+                if not new_series_fs: # Should not happen if series name is valid
+                    logger.error(f"Problem generating series dir name for '{new_series}'. Using author dir for book {uuid}.")
+                    new_parent_dir_path_obj = Path(self.library_root) / new_author_fs
+                else:
+                    new_parent_dir_path_obj = Path(self.library_root) / new_series_fs
+            else: # Non-series book
+                new_parent_dir_path_obj = Path(self.library_root) / new_author_fs
+
+            if not new_parent_dir_path_obj: # Ultimate fallback, should be extremely rare
+                 logger.error(f"Could not determine parent directory for book {uuid}. Defaulting to library root.")
+                 new_parent_dir_path_obj = Path(self.library_root)
+
+
+            logger.debug(f"Ensuring new directory exists: {new_parent_dir_path_obj}")
+            FileSystemHandler.ensure_directory_exists(str(new_parent_dir_path_obj))
+            new_file_path = str(new_parent_dir_path_obj / new_filename)
+            logger.debug(f"New full file path for book {uuid}: {new_file_path}")
+
+            if actual_old_file_path:
+                if actual_old_file_path != new_file_path:
+                    try:
+                        FileSystemHandler.rename_file(actual_old_file_path, new_file_path)
+                        logger.info(f"File for book {uuid} MOVED from {actual_old_file_path} to {new_file_path}")
+                    except Exception as e:
+                        logger.error(f"Error moving file for book {uuid} from {actual_old_file_path} to {new_file_path}: {e}")
+                else:
+                    logger.info(f"File for book {uuid} is already at the correct path and name: {new_file_path}. No move needed.")
+
+            # Update filename in DB if it has changed or if it was empty and is now set
+            if old_filename_from_db != new_filename or (not old_filename_from_db and new_filename):
+                self.books_table.update({'filename': new_filename}, q.uuid == uuid)
+                logger.info(f"Filename for book {uuid} updated in DB to: {new_filename}")
+            else:
+                logger.debug(f"Filename for book {uuid} ('{new_filename}') unchanged in DB.")
+
+        else: # No metadata changed that affects path, but check if filename was passed in new_data
+            if 'filename' in new_data and new_data['filename'] != old_book_obj.filename:
+                 # This case is if filename is directly edited by user, not via metadata change.
+                 # The current self.get_book_path(old_book_obj) would use the *old* metadata for directory.
+                 # This specific scenario might need more thought if direct filename edits are allowed
+                 # and should also trigger directory re-evaluation based on *current* metadata.
+                 # For now, we assume filename changes are driven by metadata changes above.
+                 logger.info(f"Book {uuid}: Metadata affecting path did not change, but 'filename' might have been in new_data. Current logic prioritizes metadata-driven filename/path.")
+                 # If only the filename string changed in new_data, but not the components (author, title, series),
+                 # the DB has already been updated. We might need to ensure consistency if this happens.
+                 # For now, this path is less critical as changes are expected via metadata.
+
 #################################################################
 
 ################### REMOVE BOOK ###########################
@@ -391,22 +579,127 @@ class BookManager:
 
 ################### SORT BOOKS ###########################
     def sort_books(self, field: str, reverse: bool = None) -> List[Book]:
-        """Sorts books by a given field."""
         books = self.get_all_books()
-
         if not books:
             return []
 
-        # If reverse is None, use a default value based on the field
-        if reverse is None:
-            reverse = False if field != 'added' else True
+        logger = logging.getLogger(__name__)
 
         if field == 'added':
-            books.sort(key=lambda x: x.added, reverse=reverse)
-        elif hasattr(books[0], field):
-            # Handle cases where field might be None for some books during sort
-            books.sort(key=lambda x: str(getattr(x, field) or '').lower() if isinstance(getattr(x, field), str) else getattr(x, field), reverse=reverse)
 
+            def compare_books(book1: Book, book2: Book):
+                # 1. Sort by 'added' (descending)
+                # Ensure 'added' is datetime, handle if not (though from_dict should ensure this)
+                b1_added = book1.added if isinstance(book1.added, datetime) else datetime.min.replace(tzinfo=timezone.utc)
+                b2_added = book2.added if isinstance(book2.added, datetime) else datetime.min.replace(tzinfo=timezone.utc)
+
+                # Ensure timezone awareness for comparison if one is aware and other is naive (should not happen with current from_dict)
+                if (b1_added.tzinfo is None and b2_added.tzinfo is not None):
+                    b1_added = b1_added.replace(tzinfo=timezone.utc) # Assuming UTC for safety
+                if (b2_added.tzinfo is None and b1_added.tzinfo is not None):
+                    b2_added = b2_added.replace(tzinfo=timezone.utc)
+
+
+                if b1_added < b2_added: return 1
+                if b1_added > b2_added: return -1
+
+                # At this point, book1.added == book2.added
+                is_series1 = bool(book1.series and book1.series.strip() and book1.num_series is not None)
+                is_series2 = bool(book2.series and book2.series.strip() and book2.num_series is not None)
+
+                if is_series1 and is_series2:
+                    # Both are series books
+                    # 2a. Sort by num_series (ascending)
+                    # Ensure num_series are float for comparison
+                    try:
+                        num1 = float(book1.num_series)
+                        num2 = float(book2.num_series)
+                        if num1 < num2: return -1
+                        if num1 > num2: return 1
+                    except (ValueError, TypeError):
+                        # Handle cases where num_series might not be a valid number
+                        # This case implies data inconsistency. Sort non-numeric num_series last.
+                        if isinstance(book1.num_series, (int, float)) and not isinstance(book2.num_series, (int, float)): return -1
+                        if not isinstance(book1.num_series, (int, float)) and isinstance(book2.num_series, (int, float)): return 1
+                        # If both are non-numeric or conversion failed for both, proceed to next criteria
+
+
+                    # 2b. Sort by series name (ascending, case-insensitive)
+                    series1_lower = (book1.series or "").lower()
+                    series2_lower = (book2.series or "").lower()
+                    if series1_lower < series2_lower: return -1
+                    if series1_lower > series2_lower: return 1
+
+                    # 2c. Sort by title (ascending, case-insensitive)
+                    title1_lower = (book1.title or "").lower()
+                    title2_lower = (book2.title or "").lower()
+                    if title1_lower < title2_lower: return -1
+                    if title1_lower > title2_lower: return 1
+                    return 0
+
+                elif is_series1: # book1 is series, book2 is not
+                    return -1 # Series books come before non-series books
+
+                elif is_series2: # book2 is series, book1 is not
+                    return 1  # Non-series books come after series books
+
+                else: # Both are non-series books
+                    # 2d. Sort by title (ascending, case-insensitive)
+                    title1_lower = (book1.title or "").lower()
+                    title2_lower = (book2.title or "").lower()
+                    if title1_lower < title2_lower: return -1
+                    if title1_lower > title2_lower: return 1
+                    return 0
+
+            # For 'added' field, the problem implies reverse is True by default (newest first)
+            # The compare_books function is already set for descending on 'added'.
+            # If `reverse` parameter is explicitly False for 'added', we would need to invert the compare_books logic or results.
+            # However, the original logic for `reverse is None` was `True` for 'added'.
+            # So, if `reverse` is True or None, use compare_books as is. If `reverse` is False, we need to sort ascending.
+
+            # The custom compare_books function sorts 'added' descending.
+            # If reverse=False (meaning ascending for 'added'), we need to flip the result of compare_books.
+            if reverse is False: # Explicit request for ascending 'added'
+                 books.sort(key=cmp_to_key(lambda b1, b2: -1 * compare_books(b1, b2)))
+            else: # Default (reverse=True or None) for 'added' means descending
+                 books.sort(key=cmp_to_key(compare_books))
+
+
+        elif hasattr(books[0], field) if books else False:
+            actual_reverse = reverse if reverse is not None else False # Default to ascending for other fields
+
+            def get_sort_key(b: Book):
+                val = getattr(b, field, None)
+                is_first_book_attr_str = isinstance(getattr(books[0], field, None), str) if books else False
+
+                if isinstance(val, str):
+                    return (val or "").lower()
+                if val is None:
+                    if is_first_book_attr_str: # If the attribute type is generally string
+                        return "" # Sort None strings as empty strings
+                    # For non-string types, place Nones consistently
+                    # To sort Nones last in ascending: return a type-appropriate max value or tuple
+                    # To sort Nones first in ascending: return a type-appropriate min value or tuple
+                    # Current logic: sort Nones first for non-str types in ascending if not handled explicitly
+                    # Let's refine to sort Nones last for numeric/datetime
+                    if isinstance(getattr(books[0], field, None), (int, float)):
+                         return float('inf') if not actual_reverse else float('-inf')
+                    if isinstance(getattr(books[0], field, None), datetime):
+                         return datetime.max.replace(tzinfo=timezone.utc) if not actual_reverse else datetime.min.replace(tzinfo=timezone.utc)
+                    return None # Python's default None handling (usually sorts them first)
+                return val
+
+            try:
+                books.sort(key=get_sort_key, reverse=actual_reverse)
+            except TypeError as e:
+                logger.error(f"TypeError during sorting by field '{field}': {e}. List may be partially sorted or unsorted. Attempting naive sort for '{field}'.")
+                try:
+                    # Fallback to direct attribute access, hoping Python handles mixed types or Nones more gracefully (or fails similarly)
+                    books.sort(key=lambda x: getattr(x, field, None), reverse=actual_reverse)
+                except Exception as e_naive:
+                    logger.error(f"Naive sort also failed for field '{field}': {e_naive}")
+        else:
+            logger.warning(f"Sort field '{field}' not found on Book objects or book list is empty. Returning unsorted list.")
 
         return books
 
