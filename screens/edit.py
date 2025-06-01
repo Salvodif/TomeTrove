@@ -8,7 +8,7 @@ from textual.containers import Vertical, Horizontal
 from textual.widgets import Header, Footer, Button, Label, Checkbox, Input # Added Input
 from textual.markup import escape
 
-from textual_autocomplete import AutoComplete, CompletionApplied # Added CompletionApplied
+from textual_autocomplete import AutoComplete # Changed import
 
 from tools.logger import AppLogger
 from models import BookManager, Book # Added Book for type hint
@@ -145,10 +145,10 @@ class EditScreen(Screen):
             except Exception as e:
                 self.logger.error(f"Errore nel suggerire il numero di serie per '{series_name.strip()}': {e}")
 
-    @on(CompletionApplied, "#form_series_autocomplete")
-    async def handle_series_completion(self, event: CompletionApplied) -> None:
+    @on(AutoComplete.Selected, "#form_series_autocomplete") # Changed decorator event
+    async def handle_series_completion(self, event: AutoComplete.Selected) -> None: # Changed event type
         if event.control == self.form.series_autocomplete:
-            completed_series_name = self.form.series_target_input.value
+            completed_series_name = event.value # Changed to get value from event
             await self._suggest_next_series_number(completed_series_name)
 
     @on(Input.Blurred, "#series_input_target")
