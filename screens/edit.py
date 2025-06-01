@@ -8,7 +8,7 @@ from textual.containers import Vertical, Horizontal
 from textual.widgets import Header, Footer, Button, Label, Checkbox, Input # Added Input
 from textual.markup import escape
 
-from textual_autocomplete import AutoComplete # Changed import
+from textual_autocomplete import AutoComplete, ItemSelected as AutoCompleteItemSelected # Updated import
 
 from tools.logger import AppLogger
 from models import BookManager, Book # Added Book for type hint
@@ -145,11 +145,13 @@ class EditScreen(Screen):
             except Exception as e:
                 self.logger.error(f"Errore nel suggerire il numero di serie per '{series_name.strip()}': {e}")
 
-    @on(AutoComplete.Selected, "#form_series_autocomplete") # Changed decorator event
-    async def handle_series_completion(self, event: AutoComplete.Selected) -> None: # Changed event type
-        if event.control == self.form.series_autocomplete:
-            completed_series_name = event.value # Changed to get value from event
-            await self._suggest_next_series_number(completed_series_name)
+    async def on_auto_complete_item_selected(self, message: AutoCompleteItemSelected) -> None:
+        # Check if the message came from the series autocomplete widget
+        # In EditScreen, the widget is self.form.series_autocomplete
+        if message.control == self.form.series_autocomplete:
+            completed_series_name = message.value # 'value' usually holds the selected item's string value
+            if completed_series_name: # Ensure value is not None or empty
+                await self._suggest_next_series_number(completed_series_name)
 
     @on(Input.Blurred, "#series_input_target")
     async def handle_series_input_blur(self, event: Input.Blurred) -> None:
