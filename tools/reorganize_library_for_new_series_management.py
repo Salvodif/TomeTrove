@@ -72,27 +72,39 @@ def load_config():
         with open(CONFIG_FILE_PATH, 'r') as f:
             config_data = json.load(f)
 
-        library_root = config_data.get('library_root')
-        db_file_name = config_data.get('db_file_name')
+        paths_config = config_data.get('paths')
 
-        if not library_root:
-            logger.error(f"'library_root' not found or empty in {CONFIG_FILE_PATH}. Script cannot continue.")
-            sys.exit(1)
-        if not db_file_name:
-            logger.error(f"'db_file_name' not found or empty in {CONFIG_FILE_PATH}. Script cannot continue.")
+        if not paths_config or not isinstance(paths_config, dict):
+            logger.error(f":x: [bold red]'paths' section not found or not a valid object in {CONFIG_FILE_PATH}. Script cannot continue.[/]")
             sys.exit(1)
 
-        logger.info(f"Successfully loaded configuration: LIBRARY_ROOT='{library_root}', DB_FILE_NAME='{db_file_name}'")
+        library_root_path_str = paths_config.get('library_path')
+        db_file_path_str = paths_config.get('tinydb_file') # This is a full path
+
+        if not library_root_path_str:
+            logger.error(f":x: [bold red]'paths.library_path' not found or empty in {CONFIG_FILE_PATH}. Script cannot continue.[/]")
+            sys.exit(1)
+        if not db_file_path_str:
+            logger.error(f":x: [bold red]'paths.tinydb_file' not found or empty in {CONFIG_FILE_PATH}. Script cannot continue.[/]")
+            sys.exit(1)
+
+        # The BookManager's library_root parameter is used for constructing book file paths.
+        # The BookManager's db_file_name, if it's an absolute path, will be used as is by TinyDB.
+        # Path objects are good for robust path handling.
+        library_root = str(Path(library_root_path_str).resolve())
+        db_file_name = str(Path(db_file_path_str).resolve()) # Pass the resolved absolute path
+
+        logger.info(f"Successfully loaded configuration: LIBRARY_ROOT='{library_root}', DB_FILE_NAME (full path)='{db_file_name}'")
         return library_root, db_file_name
 
     except FileNotFoundError:
-        logger.error(f"Configuration file {CONFIG_FILE_PATH} not found. Please ensure it exists in the project root. Script cannot continue.")
+        logger.error(f":x: [bold red]Configuration file {CONFIG_FILE_PATH} not found. Please ensure it exists in the project root. Script cannot continue.[/]")
         sys.exit(1)
     except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from {CONFIG_FILE_PATH}. Please check its format. Script cannot continue.")
+        logger.error(f":x: [bold red]Error decoding JSON from {CONFIG_FILE_PATH}. Please check its format. Script cannot continue.[/]")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"An unexpected error occurred while loading config: {e}. Script cannot continue.")
+        logger.error(f":x: [bold red]An unexpected error occurred while loading config: {e}. Script cannot continue.[/]")
         sys.exit(1)
 
 def reorganize():
