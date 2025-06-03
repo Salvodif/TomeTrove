@@ -15,6 +15,7 @@ from textual.widgets import Header, Footer, Label, DirectoryTree, Button, Input 
 from textual_autocomplete import AutoComplete # AutoComplete needed for SeriesSelectedInternalMessage type hint
 from widgets.bookform import SeriesSelectedInternalMessage # Added new message import
 
+from filesystem import FileSystemHandler # Added FileSystemHandler import
 from tools.logger import AppLogger
 from messages import BookAdded
 from models import Book, BookManager # BookManager has TagsManager
@@ -131,19 +132,35 @@ class AddScreen(Screen):
             fs_author = FormValidators.author_to_fsname(values['author'])
             fs_title = FormValidators.title_to_fsname(values['title'])
 
-            new_filename = f"{fs_title} - {fs_author}{original_path.suffix}"
-            author_dir = self.bookmanager.ensure_directory(values['author'])
-            dest_path = Path(author_dir) / new_filename
+            # Determine destination directory and filename
+            if values['series'] and values['num_series']:
+                dest_dir = Path(self.bookmanager.library_root) / FormValidators.series_to_fsname(values['series'])
+                try:
+                    # Ensure num_series is an int for formatting
+                    num_series_int = int(values['num_series'])
+                    new_filename = f"{num_series_int:02d} - {fs_author} - {fs_title}{original_path.suffix}"
+                except ValueError:
+                    self.logger.error(f"Invalid num_series value: {values['num_series']}. Cannot convert to int.")
+                    self.notify("Numero di serie non valido.", severity="error")
+                    return
+            else:
+                # Non-series book
+                dest_dir = Path(self.bookmanager.ensure_directory(values['author'])) # Resolves to library_root / fs_author_name
+                new_filename = f"{fs_author} - {fs_title}{original_path.suffix}"
+
+            # Ensure destination directory exists
+            FileSystemHandler.ensure_directory_exists(str(dest_dir))
+
+            dest_path = dest_dir / new_filename
 
             if dest_path.exists():
-                # Basic check to prevent overwriting, could be made more sophisticated (e.g. confirm with user)
-                self.notify(f"Un file con nome '{new_filename}' esiste già in '{author_dir}'. Scegli un titolo o autore diverso.", severity="error", timeout=7)
+                self.notify(f"Un file con nome '{new_filename}' esiste già in '{dest_dir}'. Scegli un titolo, autore o numero di serie diverso.", severity="error", timeout=7)
                 return
 
             shutil.copy2(original_path, dest_path)
 
             if dest_path.suffix.lower() in ['.pdf', '.docx', '.epub']:
-                self.update_file_metadata(dest_path, values)
+                self.update_file_metadata(dest_path, values) # Use new dest_path
 
             book = Book(
                 uuid=str(uuid4()),
