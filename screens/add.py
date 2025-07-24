@@ -120,6 +120,7 @@ class AddScreen(Screen):
 
         try:
             values = self.form.get_values()
+            self.logger.info(f"Tentativo di aggiungere il libro: {values.get('title', 'N/A')}")
             
             # The 'filename' from get_values is a Path object to the source file (or Path(existing_filename))
             # For AddScreen, it must be a valid source file path.

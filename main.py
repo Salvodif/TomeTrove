@@ -23,21 +23,36 @@ class TomeTrove(App):
     def on_message(self, message: Message) -> None:
         """Inoltra i messaggi alle schermate attive"""
         if isinstance(message, BookAdded):
+            self.logger.info(f"Nuovo libro aggiunto: {message.book.title}")
             for screen in self.screen_stack:
                 if hasattr(screen, "on_book_added"):
                     screen.on_book_added(message)
 
     def on_exception(self, exception: Exception) -> None:
         """Gestisce le eccezioni non catturate"""
-        self.logger.error("Eccezione non gestita", exc_info=exception)
+        self.logger.error(f"Eccezione non gestita: {type(exception).__name__}", exc_info=exception)
         super().on_exception(exception)
 
+import json
+import shutil
+
 def run_app():
-    config_manager = ConfigManager("config.json")
+    try:
+        config_manager = ConfigManager("config.json")
+    except RuntimeError:
+        shutil.copy("config.json.template", "config.json")
+        config_manager = ConfigManager("config.json")
+
     library_manager = LibraryManager(
         config_manager.paths['library_path'],
         config_manager.paths['tinydb_file']
     )
+
+    # Aggiungi logging per i percorsi
+    logger = AppLogger(config_manager).get_logger()
+    logger.info(f"Percorso della libreria: {config_manager.paths['library_path']}")
+    logger.info(f"Percorso del file TinyDB: {config_manager.paths['tinydb_file']}")
+
     app = TomeTrove(config_manager, library_manager)
     app.run()
 
