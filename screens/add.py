@@ -30,7 +30,27 @@ class AddScreen(Screen):
         super().__init__()
         self.bookmanager = bookmanager
         self.start_directory = start_directory
-        self.logger = AppLogger.get_logger() # Initialize logger early
+        self.logger = AppLogger.get_logger()
+
+        # Defer form creation to on_mount to ensure screen is ready for AutoComplete
+        self.form: Optional[BookForm] = None
+        self.author_autocomplete_widget: Optional[AutoComplete] = None
+        self.tags_autocomplete_widget: Optional[AutoComplete] = None
+        self.series_autocomplete_widget: Optional[AutoComplete] = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Vertical(id="main-container") # A container to mount the form into
+        yield Footer()
+
+    def on_mount(self) -> None:
+        """Called when the screen is mounted."""
+        self.call_later(self._mount_form)
+
+    def _mount_form(self) -> None:
+        """Creates and mounts the form and its widgets."""
+        if self.form: # If form is already created, do nothing.
+            return
 
         all_authors: List[str] = []
         all_tags: List[str] = []
@@ -55,39 +75,39 @@ class AddScreen(Screen):
             self.logger.error(f"Failed to get series names for autocomplete: {e}")
 
         self.form = BookForm(
-            start_directory=start_directory,
+            start_directory=self.start_directory,
             add_new_book=True,
             all_authors=all_authors,
             all_tags=all_tags,
             all_series=all_series
-            )
+        )
 
-        # The actual AutoComplete widgets are now part of BookForm's attributes
         self.author_autocomplete_widget = self.form.author_autocomplete
         self.tags_autocomplete_widget = self.form.tags_autocomplete
         self.series_autocomplete_widget = self.form.series_autocomplete
 
-    def compose(self) -> ComposeResult:
-        yield Header()
-        # BookForm.compose_form() yields its main container
-        yield self.form.form_container 
+        main_container = self.query_one("#main-container", Vertical)
         
-        # Yield autocomplete widgets separately as they are not part of form_container
-        yield self.author_autocomplete_widget
-        yield self.tags_autocomplete_widget
-        yield self.series_autocomplete_widget
+        # Mount the form container which holds the main form elements
+        main_container.mount(self.form.form_container)
 
-        yield Horizontal(
-            self.form.save_button,
-            classes="button-bar"
+        # Mount the autocomplete widgets directly onto the screen (or a container)
+        # They will position themselves relative to their target Input widgets.
+        main_container.mount(self.author_autocomplete_widget)
+        main_container.mount(self.tags_autocomplete_widget)
+        main_container.mount(self.series_autocomplete_widget)
+
+        # Mount the save button
+        main_container.mount(
+            Horizontal(
+                self.form.save_button,
+                classes="button-bar"
+            )
         )
-        yield Footer()
 
-    def on_mount(self):
         if self.form.file_tree:
             self.form.file_tree.focus()
         else:
-            # This case should ideally not happen if show_file_browser is True
             self.logger.warning("File tree not found on mount for AddScreen, focusing title input.")
             if self.form.title_input:
                 self.form.title_input.focus()
