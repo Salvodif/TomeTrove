@@ -91,11 +91,11 @@ class AddScreen(Screen):
         # Mount the form container which holds the main form elements
         main_container.mount(self.form.form_container)
 
-        # Mount the autocomplete widgets directly onto the screen (or a container)
+        # Mount the autocomplete widgets directly onto the screen.
         # They will position themselves relative to their target Input widgets.
-        main_container.mount(self.author_autocomplete_widget)
-        main_container.mount(self.tags_autocomplete_widget)
-        main_container.mount(self.series_autocomplete_widget)
+        self.mount(self.author_autocomplete_widget)
+        self.mount(self.tags_autocomplete_widget)
+        self.mount(self.series_autocomplete_widget)
 
         # Mount the save button
         main_container.mount(

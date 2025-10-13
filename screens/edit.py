@@ -60,9 +60,9 @@ class EditScreen(Screen):
         container = self.query_one("#edit-container", Vertical)
         container.mount(Label(f"Modifica: {self.book.title}", id="edit-title-label", classes="title"))
         container.mount(self.form.form_container)
-        container.mount(self.form.author_autocomplete)
-        container.mount(self.form.tags_autocomplete)
-        container.mount(self.form.series_autocomplete)
+        self.mount(self.form.author_autocomplete)
+        self.mount(self.form.tags_autocomplete)
+        self.mount(self.form.series_autocomplete)
         container.mount(
             Horizontal(
                 Button("Annulla", id="cancel"),
