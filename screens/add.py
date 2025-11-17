@@ -115,20 +115,23 @@ class AddScreen(Screen):
     @on(DirectoryTree.FileSelected)
     def handle_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         event.stop()
-        if self.form.selected_file_label:
+        if self.form:
             try:
-                # Make sure event.path is a file before updating
-                # DirectoryTree.FileSelected should only trigger for files with valid_extensions
                 p = Path(event.path)
                 if p.is_file():
-                    self.form.selected_file_label.update(str(p))
+                    self.form.selected_file_path = p
+                    if self.form.selected_file_label:
+                        self.form.selected_file_label.update(str(p))
                 else:
+                    self.form.selected_file_path = None
+                    if self.form.selected_file_label:
+                        self.form.selected_file_label.update("Errore nella selezione")
                     self.notify(f"Selezione non valida: {event.path} non è un file.", severity="error")
-                    self.form.selected_file_label.update("Errore nella selezione")
             except Exception as e:
-                self.notify(f"Errore selezione file: {e}", severity="error")
-                if self.form.selected_file_label: # Check again in case of error during update
+                self.form.selected_file_path = None
+                if self.form.selected_file_label:
                     self.form.selected_file_label.update("Errore nella selezione")
+                self.notify(f"Errore selezione file: {e}", severity="error")
 
     @on(Button.Pressed, "#save")
     def on_button_pressed(self, event: Button.Pressed):
