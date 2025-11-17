@@ -345,7 +345,7 @@ class BookForm:
         filename_path = None
         try:
             if self.add_new_book and self.selected_file_label: # "Add" mode: get path from label
-                label_content = str(self.selected_file_label.renderable)
+                label_content = str(self.selected_file_label._text)
                 if label_content != "No file selected" and label_content.strip() != "Error in selection":
                     candidate_path = Path(label_content)
                     if candidate_path.is_file():
@@ -409,7 +409,7 @@ class BookForm:
 
         if self.add_new_book: # File validation for "Add" mode
             if self.selected_file_label:
-                 label_content = str(self.selected_file_label.renderable)
+                 label_content = str(self.selected_file_label._text)
                  if label_content == "No file selected" or label_content.strip() == "Error in selection":
                     # For adding a new book, file selection is mandatory.
                     if not self.book_data: # Ensure it's truly a new book, not an edit scenario misconfigured
