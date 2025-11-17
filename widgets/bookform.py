@@ -247,6 +247,7 @@ class BookForm:
 
         self.file_tree: Optional[DirectoryTree] = None
         self.selected_file_label: Optional[Label] = None
+        self.selected_file_path: Optional[Path] = None
         self.add_new_book = add_new_book # Mode: True for Add, False for Edit
 
         if self.add_new_book: # Configuration for "Add Book" mode
@@ -344,12 +345,8 @@ class BookForm:
         """
         filename_path = None
         try:
-            if self.add_new_book and self.selected_file_label: # "Add" mode: get path from label
-                label_content = str(self.selected_file_label._text)
-                if label_content != "No file selected" and label_content.strip() != "Error in selection":
-                    candidate_path = Path(label_content)
-                    if candidate_path.is_file():
-                        filename_path = candidate_path
+            if self.add_new_book:
+                filename_path = self.selected_file_path
             elif not self.add_new_book and self.book_data and self.book_data.filename: # "Edit" mode: use existing filename
                 if self.book_data.filename: # Ensure it's not empty
                     filename_path = Path(self.book_data.filename) # This will be just the filename string
@@ -408,10 +405,6 @@ class BookForm:
                 return "Read date is required if the book is marked as read."
 
         if self.add_new_book: # File validation for "Add" mode
-            if self.selected_file_label:
-                 label_content = str(self.selected_file_label._text)
-                 if label_content == "No file selected" or label_content.strip() == "Error in selection":
-                    # For adding a new book, file selection is mandatory.
-                    if not self.book_data: # Ensure it's truly a new book, not an edit scenario misconfigured
-                         return "A file must be selected for a new book."
+            if not self.selected_file_path or not self.selected_file_path.is_file():
+                return "A file must be selected for a new book."
         return None
