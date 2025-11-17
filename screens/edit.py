@@ -1,18 +1,18 @@
 from datetime import datetime
-from typing import Optional, Callable # Added Optional, Callable
+from typing import Optional, Callable, List
 
 from textual import on
 from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Header, Footer, Button, Label, Checkbox, Input # Added Input
+from textual.widgets import Header, Footer, Button, Label, Checkbox, Input
 from textual.markup import escape
 
-from textual_autocomplete import AutoComplete # AutoComplete needed for SeriesSelectedInternalMessage type hint
-from widgets.bookform import SeriesSelectedInternalMessage # Added new message import
+from textual_autocomplete import AutoComplete
+from widgets.bookform import SeriesSelectedInternalMessage
 
 from tools.logger import AppLogger
-from models import BookManager, Book # Added Book for type hint
+from models import BookManager, Book
 from widgets.bookform import BookForm
 
 class EditScreen(Screen):
@@ -26,33 +26,51 @@ class EditScreen(Screen):
         self.bookmanager = bookmanager
         self.book = book
         self.on_save_callback = on_save_callback
-        self.form = BookForm(book,
-                             add_new_book=False,
-                             all_authors=self.bookmanager.get_all_author_names(),
-                             all_tags=self.bookmanager.tags_manager.get_all_tag_names()  if self.bookmanager.tags_manager else [],
-                             all_series=self.bookmanager.get_all_series_names()
-                            )
-
-
         self.logger = AppLogger.get_logger()
 
+        # Defer form creation to on_mount
+        self.form: Optional[BookForm] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Vertical(classes="form-screen-container", id="edit-container"):
-            yield Label(f"Modifica: {self.book.title}", id="edit-title-label", classes="title")
-            yield self.form.form_container
-            yield self.form.author_autocomplete
-            yield self.form.tags_autocomplete
-            yield self.form.series_autocomplete
-            yield Horizontal(
+        yield Vertical(classes="form-screen-container", id="edit-container")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        """Called when the screen is mounted."""
+        self.call_later(self._mount_form)
+
+    def _mount_form(self) -> None:
+        """Creates and mounts the form and its widgets."""
+        if self.form:
+            return
+
+        all_authors: List[str] = self.bookmanager.get_all_author_names()
+        all_tags: List[str] = self.bookmanager.tags_manager.get_all_tag_names() if self.bookmanager.tags_manager else []
+        all_series: List[str] = self.bookmanager.get_all_series_names()
+
+        self.form = BookForm(
+            book=self.book,
+            add_new_book=False,
+            all_authors=all_authors,
+            all_tags=all_tags,
+            all_series=all_series
+        )
+
+        container = self.query_one("#edit-container", Vertical)
+        container.mount(Label(f"Modifica: {self.book.title}", id="edit-title-label", classes="title"))
+        container.mount(self.form.form_container)
+        self.mount(self.form.author_autocomplete)
+        self.mount(self.form.tags_autocomplete)
+        self.mount(self.form.series_autocomplete)
+        container.mount(
+            Horizontal(
                 Button("Annulla", id="cancel"),
                 self.form.save_button,
                 classes="button-bar"
             )
-        yield Footer()
+        )
 
-    def on_mount(self) -> None:
         if self.form.title_input:
             self.form.title_input.focus()
 
